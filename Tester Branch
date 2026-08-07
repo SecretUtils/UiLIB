@@ -4007,9 +4007,19 @@
 					local layout_ctx = "player"
 					local function lflag() return layout_ctx == "ai" and "esp_layout_ai" or "esp_layout" end
 
+					-- Order the TEXT tags stacked in one side container. Globals (placed[k] == "on")
+					-- and bars are deliberately excluded: neither lives in a side container, and
+					-- neither has an objects[k] entry (a bar's real instance is healthbar_holder /
+					-- ammo_bg), so including them nil-indexes on the LayoutOrder write below. Bars
+					-- record a real side now, so they DO collide with this loop — that crash was
+					-- what aborted the tab switch and left the layout half-applied.
 					local function relayout(side)
 						local list = {}
-						for k, s in pairs(placed) do if s == side then list[#list + 1] = k end end
+						for k, s in pairs(placed) do
+							if s == side and not GLOBAL_KEYS[k] and not BAR_KEYS[k] and objects[k] then
+								list[#list + 1] = k
+							end
+						end
 						table.sort(list, function(a, b) return (order[a] or 0) < (order[b] or 0) end)
 						for i, k in ipairs(list) do order[k] = i; objects[k].LayoutOrder = i end
 					end
@@ -4300,6 +4310,24 @@
 						cfg._selected_key = key
 					end
 
+					-- Is the builder's PAGE actually on screen? A tab switch hides a page by setting
+					-- Visible = false on its section holder, but library:hovering() is pure
+					-- AbsolutePosition math and the pickup / right-click listeners below are GLOBAL
+					-- uis connections — so without this you could drag chips and open settings from
+					-- the Weapon/World/Misc tabs, through a page you can't even see. Walk the
+					-- ancestor chain to the ScreenGui once per frame and cache it on cfg.
+					local function builder_visible()
+						if not cfg._preview_sg then cfg._preview_sg = items.viewportframe:FindFirstAncestorWhichIsA("ScreenGui") end
+						if cfg._preview_sg and not cfg._preview_sg.Enabled then return false end
+						local node = items.viewportframe
+						while node and node ~= cfg._preview_sg do
+							if node:IsA("GuiObject") and not node.Visible then return false end
+							node = node.Parent
+						end
+						return true
+					end
+					cfg._builder_on = true
+
 					-- per-frame: move the drag ghost to the cursor + drive the hover selection.
 					-- Cheap (a few hover checks); gated to when the preview panel is on-screen.
 					library:connection(run.RenderStepped, function()
@@ -4311,8 +4339,14 @@
 								kill_drag_ghost()   -- release missed? clean it up
 							end
 						end
-						if cfg._preview_sg and not cfg._preview_sg.Enabled then
+						cfg._builder_on = builder_visible()
+						if not cfg._builder_on then
+							-- page is hidden: drop every interactive bit of state so nothing is
+							-- left selected/dragging/open when the tab comes back
 							if sel_overlay.Visible then sel_overlay.Visible = false end
+							cfg._selected_key = nil
+							if dragging then dragging = nil; hover_side = nil; hover_before = nil; hover_palette = false end
+							kill_drag_ghost()
 							return
 						end
 						-- live bar thickness: if the hp_bar_width / ammo_bar_width stat changed,
@@ -4458,6 +4492,7 @@
 
 					-- over a selected applied element, right-click opens that element's settings popup.
 					library:connection(uis.InputBegan, function(input)
+						if not cfg._builder_on then return end   -- builder's page isn't on screen
 						if input.UserInputType == Enum.UserInputType.MouseButton2
 							and cfg._selected_key and cfg.on_element_rightclick then
 							pcall(cfg.on_element_rightclick, cfg._selected_key)
@@ -4482,7 +4517,7 @@
 					-- screen. A dropdown list opened inside the popup floats on that overlay too, so
 					-- closing library.current_element_open is what clears the "dropdown stays on close".
 					library:connection(run.RenderStepped, function()
-						if cfg._preview_sg and not cfg._preview_sg.Enabled then
+						if not cfg._builder_on then
 							if settings_pop and settings_pop.Visible then settings_pop.Visible = false end
 							if library.current_element_open then
 								pcall(function()
@@ -4501,6 +4536,7 @@
 					-- chip press already set `dragging` (we no-op then); hovering a tray chip leaves
 					-- cfg._selected_key nil so this can't mis-fire there.
 					library:connection(uis.InputBegan, function(input)
+						if not cfg._builder_on then return end   -- builder's page isn't on screen
 						if input.UserInputType ~= Enum.UserInputType.MouseButton1
 							and input.UserInputType ~= Enum.UserInputType.Touch then return end
 						if dragging then return end
@@ -4552,10 +4588,61 @@
 					-- NOT floating over the viewport/character. The section holder is a vertical
 					-- UIListLayout, so LayoutOrder decides the stack: tabs(-1) -> preview(0) ->
 					-- tray(50). Switches which layout the chips edit; AI writes esp_layout_ai.
-					items.viewportframe.LayoutOrder = 0
-					local tabbar = library:create("Frame", {
+					-- The tab row and the viewport used to sit on the section's bare background,
+					-- so they read as loose parts floating next to the bordered tray. Wrap both
+					-- in ONE panel wearing the same chrome as the tray (high_contrast body,
+					-- inline border, accent top rule), and inset the viewport in its own well
+					-- so the preview reads as a screen instead of a hole in the page.
+					local preview_wrap = library:create("Frame", {
 						Parent = self.holder; Name = "\0"; LayoutOrder = -1;
-						Size = dim2(1, -8, 0, 16);
+						Size = dim2(1, -8, 0, 0); AutomaticSize = Enum.AutomaticSize.Y;
+						BackgroundColor3 = themes.preset.high_contrast; BorderSizePixel = 0; ZIndex = 5;
+					}) library:apply_theme(preview_wrap, "high_contrast", "BackgroundColor3")
+					do
+						local st = library:create("UIStroke", {
+							Parent = preview_wrap; Color = themes.preset.inline; Thickness = 1;
+							LineJoinMode = Enum.LineJoinMode.Miter;
+						}) library:apply_theme(st, "inline", "Color")
+					end
+					library:create("UIListLayout", {
+						Parent = preview_wrap; FillDirection = Enum.FillDirection.Vertical;
+						SortOrder = Enum.SortOrder.LayoutOrder; Padding = dim(0, 4);
+					})
+					library:create("UIPadding", {
+						Parent = preview_wrap; PaddingTop = dim(0, 5); PaddingBottom = dim(0, 6);
+						PaddingLeft = dim(0, 6); PaddingRight = dim(0, 6);
+					})
+					local preview_accent = library:create("Frame", {
+						Parent = preview_wrap; Name = "\0"; LayoutOrder = 0;
+						Size = dim2(1, 0, 0, 2); BackgroundColor3 = themes.preset.accent;
+						BorderSizePixel = 0; ZIndex = 6;
+					}) library:apply_theme(preview_accent, "accent", "BackgroundColor3")
+
+					-- viewport well: outline border + contrast body, so the character stands ON
+					-- a surface. The ViewportFrame itself stays transparent and fills the body.
+					local vp_well = library:create("Frame", {
+						Parent = preview_wrap; Name = "\0"; LayoutOrder = 2;
+						Size = dim2(1, 0, 0, 222); BackgroundColor3 = themes.preset.outline;
+						BorderSizePixel = 0; ZIndex = 5;
+					}) library:apply_theme(vp_well, "outline", "BackgroundColor3")
+					local vp_body = library:create("Frame", {
+						Parent = vp_well; Name = "\0";
+						Position = dim2(0, 1, 0, 1); Size = dim2(1, -2, 1, -2);
+						BackgroundColor3 = rgb(255, 255, 255); BorderSizePixel = 0; ZIndex = 5;
+					})
+					do
+						local g = library:create("UIGradient", {
+							Parent = vp_body; Rotation = 90;
+							Color = rgbseq{rgbkey(0, rgb(41, 41, 55)), rgbkey(1, rgb(35, 35, 47))};
+						}) library:apply_theme(g, "contrast", "Color")
+					end
+					items.viewportframe.Parent = vp_body
+					items.viewportframe.Position = dim2(0, 0, 0, 0)
+					items.viewportframe.Size = dim2(1, 0, 1, 0)
+
+					local tabbar = library:create("Frame", {
+						Parent = preview_wrap; Name = "\0"; LayoutOrder = 1;
+						Size = dim2(1, 0, 0, 16);
 						BackgroundTransparency = 1; BorderSizePixel = 0; ZIndex = 7;
 					})
 					library:create("UIListLayout", {
