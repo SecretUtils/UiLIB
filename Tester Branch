@@ -3833,9 +3833,12 @@
 						o.Active = true
 						o.BackgroundColor3 = ACCENT
 						o.BackgroundTransparency = 1
-						if not o:FindFirstChildOfClass("UICorner") then
-							library:create("UICorner", {Parent = o; CornerRadius = dim(0, 3)})
-						end
+						-- register the hover fill on the accent channel so it tracks the theme /
+						-- two-tone spread instead of holding the build-time ACCENT snapshot.
+						library:apply_theme(o, "accent", "BackgroundColor3")
+						-- no UICorner added on purpose: the hover glow is square, like the rest of
+						-- the menu. Elements that need their OWN rounding (head_dot's circle) already
+						-- carry one and are left alone.
 						if not o:FindFirstChildOfClass("UIPadding") then
 							library:create("UIPadding", {Parent = o;
 								PaddingLeft = dim(0, 3); PaddingRight = dim(0, 3)})
@@ -3994,9 +3997,9 @@
 							AutomaticSize = Enum.AutomaticSize.X; Size = dim2(0, 0, 0, 16); TextSize = 12;
 							TextXAlignment = Enum.TextXAlignment.Center;
 						})
-						library:create("UICorner", {Parent = drag_ghost; CornerRadius = dim(0, 3)})
+						library:apply_theme(drag_ghost, "accent", "BackgroundColor3")   -- square, matches the chips
 						library:create("UIPadding", {Parent = drag_ghost; PaddingLeft = dim(0, 5); PaddingRight = dim(0, 5)})
-						library:create("UIStroke", {Parent = drag_ghost; Color = ACCENT; Thickness = 1; LineJoinMode = Enum.LineJoinMode.Miter})
+						library:apply_theme(library:create("UIStroke", {Parent = drag_ghost; Color = ACCENT; Thickness = 1; LineJoinMode = Enum.LineJoinMode.Miter}), "accent", "Color")
 					end
 					local function kill_drag_ghost()
 						if drag_ghost then pcall(function() drag_ghost:Destroy() end); drag_ghost = nil end
@@ -4249,7 +4252,7 @@
 								BackgroundTransparency = 1; BorderSizePixel = 0;
 								AutomaticSize = Enum.AutomaticSize.X; Size = dim2(0, 0, 0, 14); TextSize = 12; ZIndex = 6;
 							})
-							library:create("UICorner", {Parent = chip; CornerRadius = dim(0, 3)})
+							library:apply_theme(chip, "accent", "BackgroundColor3")   -- square hover glow, tracks accent
 							library:create("UIPadding", {Parent = chip; PaddingLeft = dim(0, 4); PaddingRight = dim(0, 4)})
 							palette_chips[c.key] = chip
 							add_hover(chip)
@@ -4272,8 +4275,8 @@
 						Parent = items.viewportframe; Name = "\0"; Visible = false;
 						BackgroundTransparency = 1; BorderSizePixel = 0; ZIndex = 9;
 					})
-					library:create("UIStroke", {Parent = sel_overlay; Color = ACCENT; Thickness = 1.5; LineJoinMode = Enum.LineJoinMode.Miter})
-					library:create("UICorner", {Parent = sel_overlay; CornerRadius = dim(0, 3)})
+					library:apply_theme(library:create("UIStroke", {Parent = sel_overlay; Color = ACCENT; Thickness = 1.5; LineJoinMode = Enum.LineJoinMode.Miter}), "accent", "Color")
+					-- no UICorner: the hover selection outline is square, like every other menu edge
 
 					-- topmost drawn element under the cursor (small visuals win over the whole box)
 					local function pick_hover()
@@ -4593,10 +4596,16 @@
 					-- in ONE panel wearing the same chrome as the tray (high_contrast body,
 					-- inline border, accent top rule), and inset the viewport in its own well
 					-- so the preview reads as a screen instead of a hole in the page.
+					-- ZIndex 1 (NOT 5, like the tray): this panel is an OPAQUE ancestor of the
+					-- ViewportFrame, and a ViewportFrame's 3D scene draws at the viewport's own
+					-- ZIndex (1). Under Global ZIndexBehavior a higher-ZIndex ancestor paints
+					-- straight over it — the character vanished while the ZIndex-9 selection
+					-- outline and ZIndex-7 tabs still showed. At an equal ZIndex the descendant
+					-- wins, so keeping the chain at 1 lets the scene render on top of the panel.
 					local preview_wrap = library:create("Frame", {
 						Parent = self.holder; Name = "\0"; LayoutOrder = -1;
 						Size = dim2(1, -8, 0, 0); AutomaticSize = Enum.AutomaticSize.Y;
-						BackgroundColor3 = themes.preset.high_contrast; BorderSizePixel = 0; ZIndex = 5;
+						BackgroundColor3 = themes.preset.high_contrast; BorderSizePixel = 0; ZIndex = 1;
 					}) library:apply_theme(preview_wrap, "high_contrast", "BackgroundColor3")
 					do
 						local st = library:create("UIStroke", {
@@ -4615,20 +4624,22 @@
 					local preview_accent = library:create("Frame", {
 						Parent = preview_wrap; Name = "\0"; LayoutOrder = 0;
 						Size = dim2(1, 0, 0, 2); BackgroundColor3 = themes.preset.accent;
-						BorderSizePixel = 0; ZIndex = 6;
+						BorderSizePixel = 0; ZIndex = 2;
 					}) library:apply_theme(preview_accent, "accent", "BackgroundColor3")
 
 					-- viewport well: outline border + contrast body, so the character stands ON
 					-- a surface. The ViewportFrame itself stays transparent and fills the body.
+					-- Both stay at ZIndex 1 for the same reason as preview_wrap above — they're
+					-- opaque ancestors of the viewport, so anything higher hides the 3D scene.
 					local vp_well = library:create("Frame", {
 						Parent = preview_wrap; Name = "\0"; LayoutOrder = 2;
 						Size = dim2(1, 0, 0, 222); BackgroundColor3 = themes.preset.outline;
-						BorderSizePixel = 0; ZIndex = 5;
+						BorderSizePixel = 0; ZIndex = 1;
 					}) library:apply_theme(vp_well, "outline", "BackgroundColor3")
 					local vp_body = library:create("Frame", {
 						Parent = vp_well; Name = "\0";
 						Position = dim2(0, 1, 0, 1); Size = dim2(1, -2, 1, -2);
-						BackgroundColor3 = rgb(255, 255, 255); BorderSizePixel = 0; ZIndex = 5;
+						BackgroundColor3 = rgb(255, 255, 255); BorderSizePixel = 0; ZIndex = 1;
 					})
 					do
 						local g = library:create("UIGradient", {
@@ -4652,14 +4663,24 @@
 						SortOrder = Enum.SortOrder.LayoutOrder; Padding = dim(0, 4);
 					})
 					local tab_btns = {}
+					-- Boxed tabs, like the window's dock buttons: a low_contrast fill with an inline
+					-- border, so each tab reads as its own little panel instead of floating text.
+					-- The box is drawn with the button's OWN background + a UIStroke rather than child
+					-- frames, because a child frame covering the button would sit above its text and
+					-- would also break the AutomaticSize.X chain that sizes each tab to its label.
 					local function make_tab(id, label, ord)
 						local b = library:create("TextButton", {
 							Parent = tabbar; Name = "\0"; Active = true; AutoButtonColor = false;
 							FontFace = library.font; Text = label; TextSize = 12; LayoutOrder = ord;
-							TextColor3 = themes.preset.text; BackgroundTransparency = 1;   -- no glow; text-only
+							TextColor3 = themes.preset.text;
+							BackgroundColor3 = themes.preset.low_contrast; BackgroundTransparency = 0;
 							BorderSizePixel = 0; AutomaticSize = Enum.AutomaticSize.X; Size = dim2(0, 0, 1, 0); ZIndex = 7;
-						})
-						library:create("UIPadding", {Parent = b; PaddingLeft = dim(0, 5); PaddingRight = dim(0, 5)})
+						}) library:apply_theme(b, "low_contrast", "BackgroundColor3")
+						local st = library:create("UIStroke", {
+							Parent = b; Color = themes.preset.inline; Thickness = 1;
+							LineJoinMode = Enum.LineJoinMode.Miter;
+						}) library:apply_theme(st, "inline", "Color")
+						library:create("UIPadding", {Parent = b; PaddingLeft = dim(0, 6); PaddingRight = dim(0, 6)})
 						tab_btns[id] = b
 						return b
 					end
@@ -4707,7 +4728,7 @@
 								BackgroundTransparency = 1; BorderSizePixel = 0; LayoutOrder = i;
 								AutomaticSize = Enum.AutomaticSize.X; Size = dim2(0, 0, 0, 16); TextSize = 12;
 							})
-							library:create("UICorner", {Parent = btn; CornerRadius = dim(0, 3)})
+							library:apply_theme(btn, "accent", "BackgroundColor3")   -- square fill, tracks accent
 							library:create("UIPadding", {Parent = btn; PaddingLeft = dim(0, 5); PaddingRight = dim(0, 5)})
 							local function paint() btn.BackgroundTransparency = (flags[chip.flag] == true) and 0.35 or 1 end
 							paint()
@@ -6517,8 +6538,10 @@
 						BorderSizePixel = 0,
 						ZIndex = 1, 
 						BackgroundColor3 = themes.preset.outline
-					}) library:apply_theme(toggle, "outline", "BackgroundColor3") 
-					library:apply_theme(toggle, "accent", "BackgroundColor3") 
+					}) library:apply_theme(toggle, "outline", "BackgroundColor3")
+					-- (was also registered on "accent" — a second channel on the SAME property, which
+					--  let a theme repaint / two-tone spread turn this outer border accent-coloured on
+					--  some toggles and not others. It's the border: outline only.)
 
 					local inline = library:create("Frame", {
 						Parent = toggle,
@@ -6563,7 +6586,14 @@
 						BorderSizePixel = 0,
 						BackgroundColor3 = rgb(255, 255, 255)
 					})
-					library:apply_theme(background, "accent", "BackgroundColor3") 
+					-- NOT registered on the accent channel. This is the toggle's UNFILLED backing —
+					-- the mirror of the slider's "contrast" frame — so it must stay white and let the
+					-- contrast gradient below be its colour. Registering it on accent made it a
+					-- two-tone target: refresh_two_tone bypasses update_theme's "still on the old
+					-- colour" guard and force-painted accent onto it, so any toggle that had been
+					-- spread went near-black while every toggle built AFTER the last spread (the ESP
+					-- builder's lazily-created AI/Body/Exit/Item/Container footers) stayed the normal
+					-- purple-blue. That mismatch is the "MAIN looks different from the other tabs" bug.
 
 					local UIGradient = library:create("UIGradient", {
 						Parent = background,
