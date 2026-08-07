@@ -8326,7 +8326,12 @@
 						Position = dim2(0, dropdown.AbsolutePosition.X + 1, 0, dropdown.AbsolutePosition.Y + 22),
 						Size = dim2(0, dropdown.AbsoluteSize.X, 0, cfg.scrolling and 180 or 0),
 						BorderSizePixel = 0,
-						AutomaticSize = cfg.scrolling and Enum.AutomaticSize.None or Enum.AutomaticSize.Y,
+						-- NEVER AutomaticSize.Y here. Everything under this frame (inline / background /
+						-- contrast) is SCALE-sized, and Roblox's auto-size ignores scale-sized children
+						-- in the axis it's measuring — so it resolved to a 0px-tall popup and a
+						-- non-scrolling dropdown "didn't open". fit_holder() below sets a real height
+						-- from the option list's own content instead.
+						AutomaticSize = Enum.AutomaticSize.None,
 						BackgroundColor3 = themes.preset.outline,
 						Visible = false
 					})
@@ -8407,11 +8412,11 @@
 						}
 					}) library:apply_theme(UIGradient, "contrast", "Color") 
 				
-					library:create("UIListLayout", {
+					local option_layout = library:create("UIListLayout", {
 						Parent = contrast,
 						Padding = dim(0, 5),
 						SortOrder = Enum.SortOrder.LayoutOrder
-					}) library:apply_theme(UIGradient, "contrast", "Color") 
+					}) library:apply_theme(UIGradient, "contrast", "Color")
 					
 					local UIGradient = library:create("UIGradient", {
 						Parent = background,
@@ -8445,7 +8450,21 @@
 					end
 				end
 
-				function cfg.set_visible(bool) 
+				-- Height for a NON-scrolling option list. The frame chain under dropdown_holder is
+				-- all scale-sized, so auto-size can't measure it (see the AutomaticSize note above);
+				-- take the height straight off the option UIListLayout's content instead. Before the
+				-- first layout pass AbsoluteContentSize is still 0, so fall back to a per-item
+				-- estimate (12px row + 5px padding) so the very first open is never empty.
+				-- +4 covers contrast's 2px top/bottom UIPadding.
+				local function fit_holder()
+					if cfg.scrolling then return end
+					local h = option_layout and option_layout.AbsoluteContentSize.Y or 0
+					if h <= 0 then h = #cfg.option_instances * 17 end
+					if h <= 0 then return end
+					dropdown_holder.Size = dim2(0, dropdown.AbsoluteSize.X, 0, h + 4)
+				end
+
+				function cfg.set_visible(bool)
 					library.current_element_open = cfg.ignore or cfg
 
 					dropdown_holder.Visible = bool
@@ -8460,7 +8479,8 @@
 						end
 
 						dropdown_holder.Size = dim2(0, dropdown.AbsoluteSize.X, 0, dropdown_holder.Size.Y.Offset)
-						dropdown_holder.Position = dim2(0, dropdown.AbsolutePosition.X + 1, 0, dropdown.AbsolutePosition.Y + 22)                    
+						fit_holder()   -- re-measure on every open: items can be refreshed while closed
+						dropdown_holder.Position = dim2(0, dropdown.AbsolutePosition.X + 1, 0, dropdown.AbsolutePosition.Y + 22)
 					end
 				end
 
