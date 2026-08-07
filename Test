@@ -75,7 +75,11 @@
 			},
 			flags = {},
 			config_flags = {},
-			visible_flags = {}, 
+			-- flags the consumer marks as RUNTIME-ONLY (a keybind's live held state, per-frame
+			-- UI state). Skipped by get_config AND load_config: they aren't settings, and
+			-- restoring one would re-engage a feature the moment a config loads.
+			skip_flags = {},
+			visible_flags = {},
 			guis = {}, 
 			connections = {},   
 			notifications = {},
@@ -678,12 +682,21 @@
 				end
 				local Config = {}
 
+				local skip = library.skip_flags or {}
+
 				for _, v in flags do
-					if type(v) == "table" and v.key then
+					-- Types are filtered rather than passed straight through: JSONEncode THROWS on
+					-- an Instance / function / NaN, and get_config isn't pcalled at its call sites,
+					-- so one such value used to kill the Save button with nothing written to disk.
+					if skip[_] then
+						-- runtime-only: not a setting
+					elseif type(v) == "table" and v.key then
 						Config[_] = {active = v.active, mode = v.mode, key = tostring(v.key)}
 					elseif type(v) == "table" and v["Transparency"] and v["Color"] then
 						Config[_] = {Transparency = v["Transparency"], Color = v["Color"]:ToHex()}
-					else
+					elseif type(v) == "table" or type(v) == "string" or type(v) == "boolean" then
+						Config[_] = v
+					elseif type(v) == "number" and v == v and v ~= math.huge and v ~= -math.huge then
 						Config[_] = v
 					end
 				end 
@@ -694,19 +707,59 @@
 			function library:load_config(config_json) 
 				local config = http_service:JSONDecode(config_json)
 			
-				for _, v in next, config do 
-					local function_set = library.config_flags[_]
-					
-					if function_set then 
+				local skip = library.skip_flags or {}
+				-- Structural keys are applied FIRST. The ESP layout's setter re-pushes every
+				-- placed chip's real flag ON, so applying it after the saved flags overwrites
+				-- them — and `next` order is undefined, which made that a coin flip per load.
+				local structural = {esp_layout = true, esp_layout_ai = true}
+
+				local function apply(k, v)
+					if skip[k] then return end
+					local function_set = library.config_flags[k]
+
+					if function_set then
 						if type(v) == "table" and v["Transparency"] and v["Color"] then
 							function_set(hex(v["Color"]), v["Transparency"])
-						elseif type(v) == "table" and v["active"] then 
+						elseif type(v) == "table" and v["active"] then
 							function_set(v)
-						else 
+						else
 							function_set(v)
 						end
-					end 
-				end 
+					else
+						-- NOTHING owns this flag yet. Elements that build LAZILY — the ESP builder's
+						-- right-click panels, the per-context footers — only register their setter the
+						-- first time they're opened, and flags written straight from code (the builder's
+						-- sync_real_flag) never get one at all. Skipping those silently dropped every
+						-- ESP colour and every chip's on/off on load. Write the value into flags
+						-- instead: the renderer reads flags directly, and a lazily built element seeds
+						-- its default from the live flag, so it picks this up whenever it is built.
+						if type(v) == "table" and v["Transparency"] and v["Color"] then
+							flags[k] = {Color = hex(v["Color"]), Transparency = v["Transparency"]}
+						elseif type(v) == "table" and v["key"] then
+							-- keybind with no element yet: rebuild the KeyCode from its saved
+							-- string ("Enum.KeyCode.R") so the element seeds from this when it
+							-- finally builds, instead of falling back to its own default key.
+							local key = v["key"]
+							if type(key) == "string" and key:find("Enum.", 1, true) then
+								local ok, resolved = pcall(function() return library:convert_enum(key) end)
+								key = (ok and resolved) or key
+							end
+							flags[k] = {mode = v["mode"], active = v["active"], key = key}
+						else
+							flags[k] = v
+						end
+					end
+				end
+
+				-- Each key is isolated: a stale value that throws inside its setter (an item that
+				-- no longer exists in a dropdown, say) used to abort the loop, so every flag after
+				-- it silently didn't load. Now it costs exactly that one flag.
+				for k, v in next, config do
+					if structural[k] then pcall(apply, k, v) end
+				end
+				for k, v in next, config do
+					if not structural[k] then pcall(apply, k, v) end
+				end
 				-- re-apply the saved main font (restoring the list selection alone doesn't re-font
 				-- the menu). A missing/unresolvable font falls back to Default inside apply_saved_font.
 				if type(library.apply_saved_font) == "function" then
@@ -7602,8 +7655,21 @@
 					hold_instances = {},
 				}
 
-				flags[cfg.flag] = {} 
-				
+				-- A config loaded BEFORE this element existed left its value sitting in flags
+				-- (load_config's no-setter path writes it raw). Seed from that instead of the
+				-- element's own defaults — otherwise building the element clobbers the load,
+				-- which is what happens to any keybind that lives in a lazily built panel.
+				do
+					local saved = flags[cfg.flag]
+					if type(saved) == "table" and saved.key ~= nil then
+						cfg.key = saved.key
+						cfg.mode = saved.mode or cfg.mode
+						if type(saved.active) == "boolean" then cfg.active = saved.active end
+					end
+				end
+
+				flags[cfg.flag] = {}
+
 				-- the element this keybind is chained onto (toggle/dropdown). Its flag decides
 				-- whether this keybind is LISTED: the row only shows while that feature is on.
 				-- Standalone keybinds (self == library) have no parent flag -> always listed.
