@@ -4302,6 +4302,17 @@
 					end
 					cfg._selected_key = nil
 					local function update_selection()
+						-- A world tab (Body/Exit/Item/Container) hides the char preview via
+						-- show_char_preview(false), but that only clears the PARENT containers'
+						-- Visible — each tag/bar keeps its own Visible = true and its last
+						-- AbsolutePosition, and library:hovering() is pure position math with no
+						-- ancestor-visibility check. So without this gate you could still hover (and
+						-- right-click) MAIN's name/distance tags through an empty world preview.
+						if cfg._char_ctx_on == false then
+							if sel_overlay.Visible then sel_overlay.Visible = false end
+							cfg._selected_key = nil
+							return
+						end
 						if dragging then sel_overlay.Visible = false; cfg._selected_key = nil; return end
 						local e, key = pick_hover()
 						if not e then sel_overlay.Visible = false; cfg._selected_key = nil; return end
@@ -4330,6 +4341,7 @@
 						return true
 					end
 					cfg._builder_on = true
+					cfg._char_ctx_on = true   -- false while a world tab is showing (see show_char_preview)
 
 					-- per-frame: move the drag ghost to the cursor + drive the hover selection.
 					-- Cheap (a few hover checks); gated to when the preview panel is on-screen.
@@ -4757,6 +4769,10 @@
 						if tray_wrap then tray_wrap.Visible = on end
 						for _, s in ipairs(SIDES) do if containers[s] then containers[s].Visible = on end end
 						if sel_overlay and not on then sel_overlay.Visible = false end
+						-- the per-frame hover pass and the global pickup / right-click listeners can't
+						-- tell that these went away (hovering() is position-only), so tell them.
+						cfg._char_ctx_on = on
+						if not on then cfg._selected_key = nil end
 					end
 
 					-- ── CONTEXT FOOTER (Enabled toggle + Render Distance + …) ──────────────────
@@ -6315,8 +6331,11 @@
 						BorderColor3 = rgb(0, 0, 0),
 						Size = dim2(1, 0, 1, 0),
 						BorderSizePixel = 0,
-						BackgroundColor3 = rgb(255, 255, 255)
-					})
+						-- the slider's UNFILLED track. Same deal as the toggle's backing: seed
+						-- with preset.accent and register it, so it reads accent x contrast like every
+						-- other element's backing instead of a lighter, un-themed white x contrast.
+						BackgroundColor3 = themes.preset.accent
+					}) library:apply_theme(contrast, "accent", "BackgroundColor3")
 					
 					local slidertext = library:create("TextLabel", {
 						Parent = contrast,
@@ -6584,16 +6603,16 @@
 						BorderColor3 = rgb(0, 0, 0),
 						Size = dim2(1, -2, 1, -2),
 						BorderSizePixel = 0,
-						BackgroundColor3 = rgb(255, 255, 255)
+						-- accent (NOT white) so this matches every other unfilled backing in the menu.
+						-- update_theme only repaints an object that still holds the OLD preset value
+						-- (`object[prop] == themes.preset[theme]`), so creating this white while
+						-- registering it on the accent channel meant the guard never matched and it
+						-- stayed white forever — rendering as the raw contrast gradient (purple-blue)
+						-- while dropdowns/textboxes/keybinds, which seed with preset.accent, render
+						-- accent x contrast (near-black). That mismatch is the "offset colours".
+						BackgroundColor3 = themes.preset.accent
 					})
-					-- NOT registered on the accent channel. This is the toggle's UNFILLED backing —
-					-- the mirror of the slider's "contrast" frame — so it must stay white and let the
-					-- contrast gradient below be its colour. Registering it on accent made it a
-					-- two-tone target: refresh_two_tone bypasses update_theme's "still on the old
-					-- colour" guard and force-painted accent onto it, so any toggle that had been
-					-- spread went near-black while every toggle built AFTER the last spread (the ESP
-					-- builder's lazily-created AI/Body/Exit/Item/Container footers) stayed the normal
-					-- purple-blue. That mismatch is the "MAIN looks different from the other tabs" bug.
+					library:apply_theme(background, "accent", "BackgroundColor3")
 
 					local UIGradient = library:create("UIGradient", {
 						Parent = background,
