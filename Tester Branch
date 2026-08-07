@@ -4533,7 +4533,14 @@
 					-- closing library.current_element_open is what clears the "dropdown stays on close".
 					library:connection(run.RenderStepped, function()
 						if not cfg._builder_on then
-							if settings_pop and settings_pop.Visible then settings_pop.Visible = false end
+							-- ONLY act on the frame our own settings popup is actually torn down. Without
+							-- this gate the block below ran EVERY frame the builder page was off screen
+							-- (i.e. the whole time you're on any other tab) and force-closed
+							-- library.current_element_open — a LIBRARY-WIDE handle that every dropdown and
+							-- colorpicker writes itself into when it opens. Net effect: any dropdown
+							-- outside the Visuals tab was slammed shut the frame after you clicked it.
+							if not (settings_pop and settings_pop.Visible) then return end
+							settings_pop.Visible = false
 							if library.current_element_open then
 								pcall(function()
 									library.current_element_open.set_visible(false)
