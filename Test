@@ -231,7 +231,26 @@
 		-- so a fresh install gets real icons instead of blank buttons. The fallback keeps
 		-- the old uploaded rbxassetid in play if the download or getcustomasset fails, and
 		-- a failure is cached as `false` so a dead link isn't retried on every lookup.
-		library.image_url = "https://raw.githubusercontent.com/itikka78/ActualLibEd/refs/heads/main/images/"
+		library.image_url = "https://raw.githubusercontent.com/SecretUtils/UiLIB/main/"
+
+		-- The cache below keys on FILENAME only, so a machine that already ran a build
+		-- pointing at a different repo keeps serving those PNGs forever: isfile() hits,
+		-- nothing refetches, and an icon edited at the source never lands. Stamp the
+		-- source beside the cache and purge the PNGs once when it changes. delta's
+		-- FovGlow.asset shares this folder and stamp, so whichever runs first pays for it.
+		do
+			local stamp = library.directory .. "/images/_source.txt"
+			local ok, current = pcall(readfile, stamp)
+			if not (ok and current == library.image_url) then
+				pcall(function()
+					for _, file in next, listfiles(library.directory .. "/images") do
+						if string.lower(string.sub(file, -4)) == ".png" then pcall(delfile, file) end
+					end
+				end)
+				pcall(writefile, stamp, library.image_url)
+			end
+		end
+
 		local image_cache = {}
 		function library:image(name, fallback)
 			local hit = image_cache[name]
@@ -312,6 +331,55 @@
 			end
 			return entry
 		end
+
+		-- Debug command registry, driven by the Output panel's command bar. Anything in the
+		-- script registers one with
+		--     library:command("name", { desc = "...", usage = "...", callback = function(args, raw) end })
+		-- and it's runnable the moment the panel opens. The registry lives out here rather
+		-- than on the bar itself so registration works BEFORE that panel is built — same
+		-- reasoning as log_buffer above: the commands you most want are set up at load.
+		-- `args` is the whitespace-split argument list with the command name removed; `raw`
+		-- is everything after the name verbatim, for commands that take a whole string.
+		library.commands = {}
+		library.command_order = {}
+		function library:command(name, options)
+			name = string.lower(tostring(name))
+			options = options or {}
+			if library.commands[name] == nil then insert(library.command_order, name) end
+			library.commands[name] = {
+				name = name,
+				desc = options.desc or options.description or "",
+				usage = options.usage or name,
+				callback = options.callback or function() end,
+			}
+			return library.commands[name]
+		end
+
+		library:command("help", {
+			desc = "list commands, or detail one",
+			usage = "help [command]",
+			callback = function(args)
+				local target = args[1] and string.lower(args[1])
+				if target then
+					local c = library.commands[target]
+					if not c then library:log("no such command: " .. target, "ERROR") return end
+					library:log(c.usage .. "  -  " .. c.desc, "INFO")
+					return
+				end
+				library:log(#library.command_order .. " commands:", "INFO")
+				for i = 1, #library.command_order do
+					local c = library.commands[library.command_order[i]]
+					library:log(string.format("  %-22s %s", c.usage, c.desc), "INFO")
+				end
+			end,
+		})
+
+		library:command("clear", {
+			desc = "clear the output log",
+			callback = function()
+				if library.console then library.console.clear() end
+			end,
+		})
 
 		writefile("ffff.ttf", game:HttpGet("https://github.com/weasely111/beta/raw/refs/heads/main/fs-tahoma-8px.ttf"))
 
@@ -2579,7 +2647,10 @@
 					local holder = library:panel({
 						name = "Output",
 						anchor_point = vec2(0, 0),
-						size = dim2(0, 529, 0, 300),
+						-- 24 taller than the log alone needs: the command bar sits between the
+						-- console and Clear Output, and growing the panel keeps the log area the
+						-- size it was rather than trading scrollback for the prompt
+						size = dim2(0, 529, 0, 324),
 						position = dim2(0, main_window.items.main_holder.AbsolutePosition.X - 531, 0, main_window.items.main_holder.AbsolutePosition.Y + 447),
 						image = library:image("output.png", "rbxassetid://77684377836328"),
 					})
@@ -2591,6 +2662,10 @@
 					local section = column:section({name = "Output"})
 
 					library.console = section:console({height = 190})
+
+					-- typed debug commands; everything in it comes from library:command(...),
+					-- so the consumer script owns the command set and this stays generic
+					library.command_bar = section:command_bar({})
 
 					section:button_holder({})
 					section:button({name = "Clear Output", callback = function()
@@ -9046,6 +9121,149 @@
 				end
 
 				cfg.holder = sf
+
+				return setmetatable(cfg, library)
+			end
+
+			-- Command bar: a one-line input that runs the commands registered with
+			-- library:command(...). Deliberately NOT built on :textbox — that element is a
+			-- settings control (it owns a flag, saves into configs, fires its callback on
+			-- every keystroke), and none of that is right for a console prompt. This wears
+			-- the same outline/inline/gradient lining as :console so the two read as one
+			-- unit stacked in a section.
+			function library:command_bar(options)
+				options = options or {}
+				local cfg = {
+					placeholder = options.placeholder or "run a command  -  'help' to list",
+					history = {},
+					history_max = options.history_max or 30,
+				}
+				local hist_index = 0   -- 0 = the live line; counts backwards through history
+
+				local box = library:create("Frame", {
+					Parent = self.holder,
+					Name = "",
+					Size = dim2(1, -8, 0, 20),
+					BorderSizePixel = 0,
+					BorderColor3 = rgb(0, 0, 0),
+					BackgroundColor3 = themes.preset.outline
+				}) library:apply_theme(box, "outline", "BackgroundColor3")
+
+				local inline = library:create("Frame", {
+					Parent = box,
+					Name = "",
+					Position = dim2(0, 1, 0, 1),
+					Size = dim2(1, -2, 1, -2),
+					BorderSizePixel = 0,
+					BorderColor3 = rgb(0, 0, 0),
+					BackgroundColor3 = themes.preset.inline
+				}) library:apply_theme(inline, "inline", "BackgroundColor3")
+
+				local bg = library:create("Frame", {
+					Parent = inline,
+					Name = "",
+					Position = dim2(0, 1, 0, 1),
+					Size = dim2(1, -2, 1, -2),
+					BorderSizePixel = 0,
+					BorderColor3 = rgb(0, 0, 0),
+					BackgroundColor3 = rgb(255, 255, 255)
+				})
+
+				local grad = library:create("UIGradient", {
+					Parent = bg,
+					Rotation = 90,
+					Color = rgbseq{rgbkey(0, rgb(41, 41, 55)), rgbkey(1, rgb(35, 35, 47))}
+				}) library:apply_theme(grad, "contrast", "Color")
+
+				-- accent caret, so the row reads as a prompt rather than another text field
+				local prompt = library:create("TextLabel", {
+					Parent = bg,
+					Name = "",
+					FontFace = library.font,
+					TextColor3 = themes.preset.accent,
+					Text = ">",
+					Position = dim2(0, 5, 0, 0),
+					Size = dim2(0, 8, 1, 0),
+					BackgroundTransparency = 1,
+					BorderSizePixel = 0,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					TextSize = 12,
+					BackgroundColor3 = rgb(255, 255, 255)
+				}) library:apply_theme(prompt, "accent", "TextColor3")
+
+				local input = library:create("TextBox", {
+					Parent = bg,
+					Name = "",
+					FontFace = library.font,
+					TextColor3 = themes.preset.text,
+					BorderColor3 = rgb(0, 0, 0),
+					Text = "",
+					Position = dim2(0, 15, 0, 0),
+					Size = dim2(1, -19, 1, 0),
+					BorderSizePixel = 0,
+					BackgroundTransparency = 1,
+					ClearTextOnFocus = false,
+					PlaceholderText = cfg.placeholder,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					TextTruncate = Enum.TextTruncate.AtEnd,
+					CursorPosition = -1,
+					TextSize = 12,
+					BackgroundColor3 = rgb(255, 255, 255)
+				}) library:apply_theme(input, "text", "TextColor3")
+
+				library:create("UIStroke", { Parent = input, Name = "" })
+
+				function cfg.run(text)
+					text = tostring(text or ""):match("^%s*(.-)%s*$")
+					if text == "" then return end
+					library:log("> " .. text, "DEBUG")   -- echo, so the log reads as a transcript
+					insert(cfg.history, text)
+					while #cfg.history > cfg.history_max do remove(cfg.history, 1) end
+					hist_index = 0
+					local name, rest = text:match("^(%S+)%s*(.*)$")
+					local cmd = library.commands[string.lower(name)]
+					if not cmd then
+						library:log("unknown command '" .. name .. "'  -  type 'help'", "ERROR")
+						return
+					end
+					local args = {}
+					for word in rest:gmatch("%S+") do insert(args, word) end
+					-- pcall'd: a command is user-written debug code, and a typo in one must
+					-- not take down whatever thread the Enter keypress happened to run on
+					local ok, err = pcall(cmd.callback, args, rest)
+					if not ok then library:log(name .. ": " .. tostring(err), "ERROR") end
+				end
+
+				input.FocusLost:Connect(function(enter)
+					if not enter then return end
+					local text = input.Text
+					input.Text = ""
+					cfg.run(text)
+					-- focus is deliberately NOT re-captured: a prompt that keeps the keyboard
+					-- would silently eat WASD until you clicked away
+				end)
+
+				-- history recall. Roblox gives a focused TextBox no arrow-key signal of its
+				-- own, so this rides the global InputBegan and gates on IsFocused.
+				uis.InputBegan:Connect(function(input_object)
+					if not input.Parent or not input:IsFocused() then return end
+					local key = input_object.KeyCode
+					if key == Enum.KeyCode.Up then
+						if #cfg.history == 0 then return end
+						hist_index = math.min(hist_index + 1, #cfg.history)
+						input.Text = cfg.history[#cfg.history - hist_index + 1]
+						input.CursorPosition = #input.Text + 1
+					elseif key == Enum.KeyCode.Down then
+						hist_index = math.max(hist_index - 1, 0)
+						input.Text = (hist_index == 0) and "" or cfg.history[#cfg.history - hist_index + 1]
+						input.CursorPosition = #input.Text + 1
+					end
+				end)
+
+				function cfg.set_element_visible(bool) box.Visible = bool end
+				function cfg.focus() pcall(function() input:CaptureFocus() end) end
+
+				cfg.holder = bg
 
 				return setmetatable(cfg, library)
 			end
