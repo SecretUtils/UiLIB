@@ -9316,10 +9316,11 @@
 					-- shown in the header while nothing is selected: what an empty pick MEANS
 					-- is caller-specific ("show all" vs "hide all"), so the caller supplies it
 					hint     = options.hint,
-					-- optional rarity(name) -> Color3, tier_name. Drives the per-cell colour bar
-					-- and the resting border tint, the way the skin picker grades its skins. A
-					-- FUNCTION rather than a map so the caller can pattern-match families of
-					-- names instead of enumerating every one.
+					-- optional rarity(name) -> Color3, tier_name [, rank]. Drives the resting
+					-- border tint and the header's tier label, the way the skin picker grades
+					-- its skins, AND the grid's sort order (highest rank first). A FUNCTION
+					-- rather than a map so the caller can pattern-match families of names
+					-- instead of enumerating every one. `rank` is optional — see TIER_RANK.
 					rarity   = options.rarity,
 					callback = options.callback or function() end,
 					cells    = {},
@@ -9511,15 +9512,15 @@
 				end
 
 				-- Selection has to read at a glance across a 4-wide grid of small tiles, so it's
-				-- three cues at once: accent border, the body tinted toward the accent, and a
-				-- filled corner pip. A stroke colour change alone was invisible at this size.
-				-- Selection has to read at a glance across a 4-wide grid of small tiles, so it's
-				-- three cues at once: accent border, the body tinted toward the accent, and a
-				-- filled corner pip. A stroke colour change alone was invisible at this size.
+				-- three cues at once: accent border, an accent wash over the body, and a filled
+				-- corner pip. A stroke colour change alone was invisible at this size.
 				--
-				-- Rarity (when the caller supplies it) rides the resting border + the bottom bar,
-				-- so grade is readable without competing with selection: selected always wins the
-				-- border, and the bar keeps showing the tier underneath either way.
+				-- Rarity (when the caller supplies it) rides the resting border, so grade is
+				-- readable without competing with selection: selected always wins the border.
+				--
+				-- The body itself is NOT painted here — it's a white base under a themed
+				-- contrast gradient, and writing a colour onto that base would multiply through
+				-- every stop and crush the tile. That's what the wash layer is for.
 				local function paint(cell)
 					local on = cfg.selected[cell.name] == true
 					local hot = cell.name == hovered
@@ -9532,9 +9533,8 @@
 						or (rare and rare:Lerp(themes.preset.outline, 0.5))
 						or themes.preset.outline
 					cell.stroke.Thickness = on and 2 or 1
-					cell.btn.BackgroundColor3 = on
-						and themes.preset.inline:Lerp(themes.preset.accent, 0.3)
-						or  themes.preset.inline
+					cell.wash.Visible = on
+					cell.wash.BackgroundColor3 = themes.preset.accent
 					cell.pip.Visible = on
 					cell.pip.BackgroundColor3 = themes.preset.accent
 				end
@@ -9600,95 +9600,152 @@
 					cell.vp.ImageTransparency = 1
 				end
 
-				local ord = 1
+				-- Grade before layout, so the grid can be ORDERED by it: best tier first,
+				-- alphabetical within a tier. Source order is whatever the game happens to
+				-- store (usually alphabetical), which scatters the few crates worth picking
+				-- across the whole scroll; sorting puts them in the first row instead.
+				--
+				-- Rank comes from the rarity fn's THIRD return when it supplies one. Failing
+				-- that it's looked up from the tier NAME below, so a caller using the usual
+				-- five-tier vocabulary gets the ordering without doing anything. Anything
+				-- ungraded ranks -1 and sinks to the bottom rather than salting the middle.
+				local TIER_RANK = {
+					mythical = 6, legendary = 5, epic = 4,
+					rare = 3, uncommon = 2, common = 1, norarity = 0,
+				}
+				local entries = {}
 				for _, child in ipairs(cfg.source:GetChildren()) do
 					if child:IsA("Model") or child:IsA("BasePart") then
-						local btn = library:create("ImageButton", {
-							Parent = sf,
-							Name = "",
-							BackgroundColor3 = themes.preset.inline,
-							BorderSizePixel = 0,
-							AutoButtonColor = false,
-							Image = "",
-							LayoutOrder = ord
-						}) library:apply_theme(btn, "inline", "BackgroundColor3")
-						ord = ord + 1
-
-						library:create("UICorner", { Parent = btn, CornerRadius = UDim.new(0, 3) })
-						local stroke = library:create("UIStroke", {
-							Parent = btn,
-							Color = themes.preset.outline,
-							Thickness = 1,
-							LineJoinMode = Enum.LineJoinMode.Miter
-						})
-
-						-- the preview owns the whole tile (no caption strip to leave room for).
-						-- Rarity rides the BORDER rather than a bottom bar like the skin picker's:
-						-- a bar would have to eat 3px of preview on an already-small tile, and the
-						-- surround reads just as clearly without touching the layout.
-						local vp = library:create("ViewportFrame", {
-							Parent = btn,
-							Name = "",
-							BackgroundTransparency = 1,
-							Position = dim2(0, 3, 0, 3),
-							Size = dim2(1, -6, 1, -6),
-							BorderSizePixel = 0,
-							ImageTransparency = 1,
-							Ambient = rgb(190, 190, 190),
-							LightColor = rgb(255, 255, 255),
-							LightDirection = Vector3.new(-0.6, -1, -0.4)
-						})
-
-						-- selected marker: small accent square in the top-right corner
-						local pip = library:create("Frame", {
-							Parent = btn,
-							Name = "",
-							AnchorPoint = vec2(1, 0),
-							Position = dim2(1, -3, 0, 3),
-							Size = dim2(0, 6, 0, 6),
-							BorderSizePixel = 0,
-							BorderColor3 = rgb(0, 0, 0),
-							Visible = false,
-							BackgroundColor3 = themes.preset.accent
-						})
-						library:create("UICorner", { Parent = pip, CornerRadius = UDim.new(1, 0) })
-
-						-- resolved ONCE at build: the grade of a model never changes, and this
-						-- runs inside paint() which fires on every hover
-						local rcol, rname
+						-- resolved ONCE here: the grade of a model never changes, and paint()
+						-- (which reads it) fires on every hover
+						local rcol, rname, rank
 						if cfg.rarity then
-							local okr, c, n = pcall(cfg.rarity, child.Name)
-							if okr and typeof(c) == "Color3" then rcol, rname = c, n end
+							local okr, c, n, r = pcall(cfg.rarity, child.Name)
+							if okr and typeof(c) == "Color3" then
+								rcol, rname = c, n
+								rank = tonumber(r) or TIER_RANK[(tostring(n):lower():gsub("[^%a]", ""))]
+							end
 						end
-
-						local cell = { name = child.Name, model = child, btn = btn,
-							vp = vp, pip = pip, stroke = stroke,
-							rarity = rcol, tier = rname, built = false }
-						cfg.cells[#cfg.cells + 1] = cell
-
-						btn.MouseButton1Click:Connect(function()
-							cfg.selected[cell.name] = not cfg.selected[cell.name] or nil
-							paint(cell)
-							refresh_header()
-							commit()
-							library:ui_sound("click")
-						end)
-
-						-- hover names the model in the header and lifts its border, so you can
-						-- read the grid by sweeping across it instead of guessing at thumbnails
-						btn.MouseEnter:Connect(function()
-							hovered, hovered_cell = cell.name, cell
-							paint(cell)
-							refresh_header()
-						end)
-						btn.MouseLeave:Connect(function()
-							if hovered == cell.name then hovered, hovered_cell = nil, nil end
-							paint(cell)
-							refresh_header()
-						end)
-
-						paint(cell)
+						entries[#entries + 1] = {
+							child = child, rarity = rcol, tier = rname, rank = rank or -1
+						}
 					end
+				end
+				table.sort(entries, function(a, b)
+					if a.rank ~= b.rank then return a.rank > b.rank end
+					return a.child.Name < b.child.Name
+				end)
+
+				local ord = 1
+				for _, entry in ipairs(entries) do
+					local child = entry.child
+					-- White base, because the gradient below MULTIPLIES it — a tinted base
+					-- would darken every stop instead of shading it. Same trick every panel
+					-- body in this file uses.
+					local btn = library:create("ImageButton", {
+						Parent = sf,
+						Name = "",
+						BackgroundColor3 = rgb(255, 255, 255),
+						BorderSizePixel = 0,
+						AutoButtonColor = false,
+						Image = "",
+						LayoutOrder = ord
+					})
+					ord = ord + 1
+
+					library:create("UICorner", { Parent = btn, CornerRadius = UDim.new(0, 3) })
+
+					-- the tile body shades with the theme's contrast ramp, so a grid of these
+					-- reads as a set of surfaces rather than a sheet of flat squares. Registered
+					-- with apply_theme like the window/section bodies, so a retint repaints it.
+					local body = library:create("UIGradient", {
+						Parent = btn,
+						Rotation = 90,
+						Color = rgbseq{rgbkey(0, rgb(41, 41, 55)), rgbkey(1, rgb(35, 35, 47))}
+					}) library:apply_theme(body, "contrast", "Color")
+					local stroke = library:create("UIStroke", {
+						Parent = btn,
+						Color = themes.preset.outline,
+						Thickness = 1,
+						LineJoinMode = Enum.LineJoinMode.Miter
+					})
+
+					-- Selected wash: accent laid OVER the gradient instead of replacing the
+					-- background, so a picked tile keeps its shading. It sits UNDER the preview
+					-- (ZIndex 1 vs 2) so the model stays clean and only the body tints.
+					local wash = library:create("Frame", {
+						Parent = btn,
+						Name = "",
+						ZIndex = 1,
+						Size = dim2(1, 0, 1, 0),
+						BorderSizePixel = 0,
+						BorderColor3 = rgb(0, 0, 0),
+						Visible = false,
+						BackgroundTransparency = 0.72,
+						BackgroundColor3 = themes.preset.accent
+					}) library:apply_theme(wash, "accent", "BackgroundColor3")
+					library:create("UICorner", { Parent = wash, CornerRadius = UDim.new(0, 3) })
+
+					-- the preview owns the whole tile (no caption strip to leave room for).
+					-- Rarity rides the BORDER rather than a bottom bar like the skin picker's:
+					-- a bar would have to eat 3px of preview on an already-small tile, and the
+					-- surround reads just as clearly without touching the layout.
+					local vp = library:create("ViewportFrame", {
+						Parent = btn,
+						Name = "",
+						ZIndex = 2,
+						BackgroundTransparency = 1,
+						Position = dim2(0, 3, 0, 3),
+						Size = dim2(1, -6, 1, -6),
+						BorderSizePixel = 0,
+						ImageTransparency = 1,
+						Ambient = rgb(190, 190, 190),
+						LightColor = rgb(255, 255, 255),
+						LightDirection = Vector3.new(-0.6, -1, -0.4)
+					})
+
+					-- selected marker: small accent square in the top-right corner
+					local pip = library:create("Frame", {
+						Parent = btn,
+						Name = "",
+						ZIndex = 3,
+						AnchorPoint = vec2(1, 0),
+						Position = dim2(1, -3, 0, 3),
+						Size = dim2(0, 6, 0, 6),
+						BorderSizePixel = 0,
+						BorderColor3 = rgb(0, 0, 0),
+						Visible = false,
+						BackgroundColor3 = themes.preset.accent
+					})
+					library:create("UICorner", { Parent = pip, CornerRadius = UDim.new(1, 0) })
+
+					local cell = { name = child.Name, model = child, btn = btn,
+						vp = vp, pip = pip, wash = wash, stroke = stroke,
+						rarity = entry.rarity, tier = entry.tier, built = false }
+					cfg.cells[#cfg.cells + 1] = cell
+
+					btn.MouseButton1Click:Connect(function()
+						cfg.selected[cell.name] = not cfg.selected[cell.name] or nil
+						paint(cell)
+						refresh_header()
+						commit()
+						library:ui_sound("click")
+					end)
+
+					-- hover names the model in the header and lifts its border, so you can
+					-- read the grid by sweeping across it instead of guessing at thumbnails
+					btn.MouseEnter:Connect(function()
+						hovered, hovered_cell = cell.name, cell
+						paint(cell)
+						refresh_header()
+					end)
+					btn.MouseLeave:Connect(function()
+						if hovered == cell.name then hovered, hovered_cell = nil, nil end
+						paint(cell)
+						refresh_header()
+					end)
+
+					paint(cell)
 				end
 
 				-- Is this cell inside (or just outside) the scroll window? `margin` in pixels
