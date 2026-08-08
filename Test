@@ -6360,6 +6360,11 @@
 					end
 					local ok = pcall(function()
 						local clone = model:Clone()
+						-- dress FIRST, then strip: the callback may add whole sub-models of its
+						-- own (a weapon's attachments), and those need the same anchoring and
+						-- script/sound stripping as the base — running the pass first would
+						-- leave everything it added untreated.
+						if options.dress then pcall(options.dress, clone) end
 						for _, d in ipairs(clone:GetDescendants()) do
 							if STRIP3D[d.ClassName] then
 								d:Destroy()
@@ -6369,7 +6374,6 @@
 								d.CastShadow = false
 							end
 						end
-						if options.dress then pcall(options.dress, clone) end
 
 						local world = Instance.new("WorldModel")
 						world.Parent = vp
