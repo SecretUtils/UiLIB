@@ -9268,6 +9268,346 @@
 				return setmetatable(cfg, library)
 			end
 
+			-- Generic 3D model picker: a scrolling grid of ViewportFrame previews, one per
+			-- Model in `source`, multi-selected into `flag` as an array of names. Written for
+			-- the container filter but deliberately source-agnostic — point it at any folder
+			-- of models (weapons, attachments, skins) and it works unchanged.
+			--
+			-- ViewportFrames are NOT free: each one is its own render pass, every frame, for
+			-- as long as it exists. So the cost is bounded four ways:
+			--   * a cell's 3D scene is built LAZILY, and only once the cell is on screen
+			--   * exactly ONE build per tick — which is also what produces the staggered
+			--     fade-in, rather than twenty scenes popping in at once
+			--   * scrolling a built cell well out of view TEARS ITS SCENE BACK DOWN, so the
+			--     live viewport count is capped by what fits on screen, not by folder size
+			--   * nothing renders while the panel is closed (Roblox skips hidden GUI), so a
+			--     grid you aren't looking at costs zero
+			-- The camera is static — no per-frame CFrame writes anywhere in here.
+			function library:model_grid(options)
+				options = options or {}
+				local cfg = {
+					flag     = options.flag or "model_grid",
+					source   = options.source,
+					height   = options.height or 210,
+					columns  = options.columns or 5,
+					callback = options.callback or function() end,
+					cells    = {},
+					selected = {},
+					visible  = true,
+				}
+
+				-- classes that are pure noise inside a preview: they'd run code, play audio,
+				-- emit particles or draw a GUI in a 44px thumbnail. Decals/Textures/
+				-- SurfaceAppearances are deliberately NOT here — those are the look.
+				local STRIP = {
+					Script = true, LocalScript = true, ModuleScript = true,
+					Sound = true, ParticleEmitter = true, Trail = true,
+					PointLight = true, SpotLight = true, SurfaceLight = true,
+					Beam = true, Smoke = true, Fire = true, Sparkles = true,
+					ClickDetector = true, ProximityPrompt = true,
+					BillboardGui = true, SurfaceGui = true,
+				}
+
+				local box = library:create("Frame", {
+					Parent = self.holder,
+					Name = "",
+					Size = dim2(1, -8, 0, cfg.height),
+					BorderSizePixel = 0,
+					BorderColor3 = rgb(0, 0, 0),
+					BackgroundColor3 = themes.preset.outline
+				}) library:apply_theme(box, "outline", "BackgroundColor3")
+
+				local inline = library:create("Frame", {
+					Parent = box,
+					Name = "",
+					Position = dim2(0, 1, 0, 1),
+					Size = dim2(1, -2, 1, -2),
+					BorderSizePixel = 0,
+					BorderColor3 = rgb(0, 0, 0),
+					BackgroundColor3 = themes.preset.inline
+				}) library:apply_theme(inline, "inline", "BackgroundColor3")
+
+				local bg = library:create("Frame", {
+					Parent = inline,
+					Name = "",
+					Position = dim2(0, 1, 0, 1),
+					Size = dim2(1, -2, 1, -2),
+					BorderSizePixel = 0,
+					BorderColor3 = rgb(0, 0, 0),
+					BackgroundColor3 = rgb(255, 255, 255)
+				})
+
+				local grad = library:create("UIGradient", {
+					Parent = bg,
+					Rotation = 90,
+					Color = rgbseq{rgbkey(0, rgb(41, 41, 55)), rgbkey(1, rgb(35, 35, 47))}
+				}) library:apply_theme(grad, "contrast", "Color")
+
+				local sf = library:create("ScrollingFrame", {
+					Parent = bg,
+					Name = "",
+					Active = true,
+					BackgroundTransparency = 1,
+					Size = dim2(1, 0, 1, 0),
+					BorderSizePixel = 0,
+					BorderColor3 = rgb(0, 0, 0),
+					MidImage = "rbxassetid://103468666327206",
+					TopImage = "rbxassetid://103468666327206",
+					BottomImage = "rbxassetid://103468666327206",
+					AutomaticCanvasSize = Enum.AutomaticSize.Y,
+					CanvasSize = dim2(0, 0, 0, 0),
+					ScrollingDirection = Enum.ScrollingDirection.Y,
+					ScrollBarThickness = 3,
+					ScrollBarImageColor3 = themes.preset.accent,
+					BackgroundColor3 = rgb(255, 255, 255)
+				}) library:apply_theme(sf, "accent", "ScrollBarImageColor3")
+
+				library:create("UIPadding", {
+					Parent = sf,
+					PaddingTop = dim(0, 4), PaddingBottom = dim(0, 4),
+					PaddingLeft = dim(0, 4), PaddingRight = dim(0, 4)
+				})
+
+				local grid = library:create("UIGridLayout", {
+					Parent = sf,
+					CellSize = dim2(0, 44, 0, 56),
+					CellPadding = dim2(0, 4, 0, 4),
+					SortOrder = Enum.SortOrder.LayoutOrder
+				})
+
+				-- grow the cells so `columns` of them exactly span the row, instead of
+				-- leaving a ragged gap down the right edge
+				local function fit()
+					local w = sf.AbsoluteWindowSize.X - 8
+					if w <= 8 then return end
+					local pad = 4
+					local size = math.floor((w - pad * (cfg.columns - 1)) / cfg.columns)
+					if size < 24 then size = 24 end
+					grid.CellSize = dim2(0, size, 0, size + 12)   -- +12 = the name caption
+				end
+				sf:GetPropertyChangedSignal("AbsoluteWindowSize"):Connect(fit)
+
+				if not cfg.source then
+					library:create("TextLabel", {
+						Parent = sf,
+						Name = "",
+						FontFace = library.font,
+						TextColor3 = themes.preset.text,
+						Text = "  source folder not found",
+						Size = dim2(1, -8, 0, 14),
+						BackgroundTransparency = 1,
+						BorderSizePixel = 0,
+						TextXAlignment = Enum.TextXAlignment.Left,
+						TextSize = 12,
+						BackgroundColor3 = rgb(255, 255, 255)
+					})
+					function cfg.set_element_visible(bool) box.Visible = bool end
+					function cfg.set() end
+					cfg.holder = sf
+					return setmetatable(cfg, library)
+				end
+
+				local function commit()
+					local out = {}
+					for _, cell in ipairs(cfg.cells) do
+						if cfg.selected[cell.name] then out[#out + 1] = cell.name end
+					end
+					flags[cfg.flag] = out
+					cfg.callback(out)
+				end
+
+				local function paint(cell)
+					local on = cfg.selected[cell.name] == true
+					cell.stroke.Color = on and themes.preset.accent or themes.preset.outline
+					cell.stroke.Thickness = on and 2 or 1
+					cell.label.TextColor3 = on and themes.preset.accent or themes.preset.text
+				end
+
+				-- Build a cell's 3D scene. Everything is anchored and the camera is placed
+				-- once from the model's own bounding box, so nothing in here ever runs again.
+				local function build(cell)
+					if cell.built then return end
+					cell.built = true
+					pcall(function()
+						local clone = cell.model:Clone()
+						for _, d in ipairs(clone:GetDescendants()) do
+							if STRIP[d.ClassName] then
+								d:Destroy()
+							elseif d:IsA("BasePart") then
+								d.Anchored = true
+								d.CanCollide = false; d.CanQuery = false; d.CanTouch = false
+								d.CastShadow = false
+							end
+						end
+
+						local world = Instance.new("WorldModel")
+						world.Parent = cell.vp
+						clone.Parent = world
+
+						local pivot, size
+						if clone:IsA("Model") then
+							pivot, size = clone:GetBoundingBox()
+						elseif clone:IsA("BasePart") then
+							pivot, size = clone.CFrame, clone.Size
+						else
+							return
+						end
+						-- a zero-size model would put the camera inside itself
+						if size.Magnitude < 0.1 then size = Vector3.new(4, 4, 4) end
+
+						local cam = Instance.new("Camera")
+						cam.FieldOfView = 40
+						cam.Parent = cell.vp
+						cell.vp.CurrentCamera = cam
+						-- frame the whole bounding sphere, then back off a touch for margin
+						local dist = (size.Magnitude * 0.5) / math.tan(math.rad(cam.FieldOfView * 0.5)) * 1.15
+						local dir = Vector3.new(1, 0.55, 1).Unit   -- three-quarter view
+						cam.CFrame = CFrame.lookAt(pivot.Position + dir * dist, pivot.Position)
+
+						cell.world = world
+					end)
+
+					-- rise + fade: the cell's contents start low and transparent, so a scene
+					-- appearing reads as it settling into place rather than popping
+					cell.vp.ImageTransparency = 1
+					cell.vp.Position = dim2(0, 3, 0, 11)
+					cell.label.TextTransparency = 1
+					library:tween(cell.vp, {ImageTransparency = 0, Position = dim2(0, 3, 0, 3)})
+					library:tween(cell.label, {TextTransparency = 0})
+				end
+
+				local function teardown(cell)
+					if not cell.built then return end
+					cell.built = false
+					if cell.world then pcall(function() cell.world:Destroy() end); cell.world = nil end
+					for _, ch in ipairs(cell.vp:GetChildren()) do
+						if ch:IsA("Camera") then pcall(function() ch:Destroy() end) end
+					end
+					cell.vp.ImageTransparency = 1
+				end
+
+				local ord = 1
+				for _, child in ipairs(cfg.source:GetChildren()) do
+					if child:IsA("Model") or child:IsA("BasePart") then
+						local btn = library:create("ImageButton", {
+							Parent = sf,
+							Name = "",
+							BackgroundColor3 = themes.preset.inline,
+							BorderSizePixel = 0,
+							AutoButtonColor = false,
+							Image = "",
+							LayoutOrder = ord
+						}) library:apply_theme(btn, "inline", "BackgroundColor3")
+						ord = ord + 1
+
+						library:create("UICorner", { Parent = btn, CornerRadius = UDim.new(0, 3) })
+						local stroke = library:create("UIStroke", {
+							Parent = btn,
+							Color = themes.preset.outline,
+							Thickness = 1,
+							LineJoinMode = Enum.LineJoinMode.Miter
+						})
+
+						local vp = library:create("ViewportFrame", {
+							Parent = btn,
+							Name = "",
+							BackgroundTransparency = 1,
+							Position = dim2(0, 3, 0, 3),
+							Size = dim2(1, -6, 1, -18),
+							BorderSizePixel = 0,
+							ImageTransparency = 1,
+							Ambient = rgb(190, 190, 190),
+							LightColor = rgb(255, 255, 255),
+							LightDirection = Vector3.new(-0.6, -1, -0.4)
+						})
+
+						local label = library:create("TextLabel", {
+							Parent = btn,
+							Name = "",
+							FontFace = library.font,
+							TextColor3 = themes.preset.text,
+							Text = child.Name,
+							AnchorPoint = vec2(0.5, 1),
+							Position = dim2(0.5, 0, 1, -1),
+							Size = dim2(1, -4, 0, 12),
+							BackgroundTransparency = 1,
+							BorderSizePixel = 0,
+							TextTruncate = Enum.TextTruncate.AtEnd,
+							TextSize = 9,
+							BackgroundColor3 = rgb(255, 255, 255)
+						})
+
+						local cell = { name = child.Name, model = child, btn = btn,
+							vp = vp, label = label, stroke = stroke, built = false }
+						cfg.cells[#cfg.cells + 1] = cell
+
+						btn.MouseButton1Click:Connect(function()
+							cfg.selected[cell.name] = not cfg.selected[cell.name] or nil
+							paint(cell)
+							commit()
+							library:ui_sound("click")
+						end)
+
+						paint(cell)
+					end
+				end
+
+				-- Is this cell inside (or just outside) the scroll window? `margin` in pixels
+				-- lets the builder run slightly ahead of the scroll and the teardown lag
+				-- slightly behind it, so neither fires on a cell you're about to look at.
+				local function inView(cell, margin)
+					local top = sf.AbsolutePosition.Y
+					local bottom = top + sf.AbsoluteWindowSize.Y
+					local cy = cell.btn.AbsolutePosition.Y
+					local ch = cell.btn.AbsoluteSize.Y
+					return (cy + ch) >= (top - margin) and cy <= (bottom + margin)
+				end
+
+				-- ONE loop drives lazy build + out-of-view teardown for the whole grid: no
+				-- per-cell connections, no RenderStepped, and it idles at 0.4s once every
+				-- visible cell is built. Building one per tick IS the staggered fade-in.
+				task.spawn(function()
+					while box.Parent do
+						local worked = false
+						if box.Visible and sf.AbsoluteWindowSize.Y > 0 then
+							for _, cell in ipairs(cfg.cells) do
+								if not cell.built and inView(cell, 40) then
+									build(cell)
+									worked = true
+									break   -- one per tick
+								end
+							end
+							-- reclaim scenes that scrolled well clear of the window
+							for _, cell in ipairs(cfg.cells) do
+								if cell.built and not inView(cell, 400) then teardown(cell) end
+							end
+						end
+						task.wait(worked and 0.05 or 0.4)
+					end
+				end)
+
+				function cfg.set_element_visible(bool) box.Visible = bool end
+
+				function cfg.set(list)
+					table.clear(cfg.selected)
+					if type(list) == "table" then
+						for _, v in ipairs(list) do cfg.selected[tostring(v)] = true end
+					end
+					for _, cell in ipairs(cfg.cells) do paint(cell) end
+					commit()
+				end
+
+				cfg.set(flags[cfg.flag])
+				task.defer(fit)
+
+				library.config_flags[cfg.flag] = cfg.set
+				library.visible_flags[cfg.flag] = cfg.set_element_visible
+
+				cfg.holder = sf
+
+				return setmetatable(cfg, library)
+			end
+
 			function library:textbox(options)
 				local cfg = {
 					placeholder = options.placeholder or options.placeholdertext or options.holder or options.holdertext or "type here...",
