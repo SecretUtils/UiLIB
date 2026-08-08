@@ -934,6 +934,24 @@
 				end
 			end
 
+			-- Re-apply every channel to whatever exists RIGHT NOW.
+			--
+			-- The consumer themes the menu once at load, but several things are built LAZILY —
+			-- ESP context footers, right-click settings panels, and anything they contain. Those
+			-- are created long after that sweep, so they seed with the hardcoded default-theme
+			-- literals in this file (the rgb(41,41,55) body gradient especially) and nothing ever
+			-- repaints them. Under the stock blue theme that's invisible; under any retint those
+			-- panels render as blue-purple blocks while the rest of the menu is the new colour.
+			--
+			-- Cheap and idempotent: passing each channel its CURRENT value makes it a no-op for
+			-- everything already correct, and update_theme repaints registered UIGradients
+			-- unconditionally, which is exactly the class of object that was stuck.
+			function library:retheme()
+				for index, value in next, themes.preset do
+					pcall(function() library:update_theme(index, value) end)
+				end
+			end
+
 			-- Two-tone: instead of one flat accent, every accented element takes the colour
 			-- at ITS horizontal position across the window — left edge = colour A, right edge
 			-- = colour B. Each element stays a flat colour (only the window glow and the top
@@ -4629,6 +4647,8 @@
 						if not settings_panels[key] then return end   -- ctx binds the right flags (player/ai)
 						show_panel(tostring(key) .. ":" .. layout_ctx, LABELS[key] or key, function(host)
 							settings_panels[key](host, key, layout_ctx)
+							-- same lazy-build retint as the context footers (see library:retheme)
+							pcall(function() library:retheme() end)
 						end)
 					end
 					cfg.on_element_rightclick = open_settings
@@ -4945,6 +4965,9 @@
 							local host = setmetatable({holder = wrap, right_holder = wrap}, library)
 							pcall(footer_defs[ctx], host, ctx)
 							footer_frames[ctx] = wrap
+							-- built after the consumer's theme sweep, so paint it to the LIVE theme
+							-- (otherwise this footer keeps the file's default-blue literals)
+							pcall(function() library:retheme() end)
 						end
 						for id, w in pairs(footer_frames) do w.Visible = (id == ctx) end
 					end
@@ -9290,6 +9313,14 @@
 					source   = options.source,
 					height   = options.height or 210,
 					columns  = options.columns or 4,
+					-- shown in the header while nothing is selected: what an empty pick MEANS
+					-- is caller-specific ("show all" vs "hide all"), so the caller supplies it
+					hint     = options.hint,
+					-- optional rarity(name) -> Color3, tier_name. Drives the per-cell colour bar
+					-- and the resting border tint, the way the skin picker grades its skins. A
+					-- FUNCTION rather than a map so the caller can pattern-match families of
+					-- names instead of enumerating every one.
+					rarity   = options.rarity,
 					callback = options.callback or function() end,
 					cells    = {},
 					selected = {},
@@ -9426,19 +9457,26 @@
 				sf:GetPropertyChangedSignal("AbsoluteWindowSize"):Connect(fit)
 
 				-- header text: the hovered model, else how many are picked
-				local hovered
+				local hovered, hovered_cell
 				local function refresh_header()
 					if hovered then
-						header.Text = pretty(hovered)
-						header.TextColor3 = themes.preset.accent
+						-- name the tier too, in its own colour: a bare colour bar is only
+						-- legible once you already know the scale
+						local tier = hovered_cell and hovered_cell.tier
+						header.Text = tier and (pretty(hovered) .. "   -   " .. tier)
+							or pretty(hovered)
+						header.TextColor3 = (hovered_cell and hovered_cell.rarity)
+							or themes.preset.accent
 						return
 					end
 					local n = 0
 					for _ in pairs(cfg.selected) do n = n + 1 end
 					local total = #cfg.cells
-					header.Text = (n > 0)
-						and (n .. " of " .. total .. " selected")
-						or  (total .. " available  -  none picked")
+					if n > 0 then
+						header.Text = n .. " of " .. total .. " selected"
+					else
+						header.Text = cfg.hint or (total .. " available  -  none picked")
+					end
 					header.TextColor3 = themes.preset.text
 				end
 
@@ -9475,11 +9513,24 @@
 				-- Selection has to read at a glance across a 4-wide grid of small tiles, so it's
 				-- three cues at once: accent border, the body tinted toward the accent, and a
 				-- filled corner pip. A stroke colour change alone was invisible at this size.
+				-- Selection has to read at a glance across a 4-wide grid of small tiles, so it's
+				-- three cues at once: accent border, the body tinted toward the accent, and a
+				-- filled corner pip. A stroke colour change alone was invisible at this size.
+				--
+				-- Rarity (when the caller supplies it) rides the resting border + the bottom bar,
+				-- so grade is readable without competing with selection: selected always wins the
+				-- border, and the bar keeps showing the tier underneath either way.
 				local function paint(cell)
 					local on = cfg.selected[cell.name] == true
 					local hot = cell.name == hovered
+					local rare = cell.rarity
+					-- resting border carries the grade, muted toward the outline so a full grid
+					-- reads as a calm dark sheet with a hint of colour rather than a rainbow;
+					-- hover brings the grade up to full, and selection always wins with accent.
 					cell.stroke.Color = on and themes.preset.accent
-						or (hot and themes.preset.text or themes.preset.outline)
+						or (hot and (rare or themes.preset.text))
+						or (rare and rare:Lerp(themes.preset.outline, 0.5))
+						or themes.preset.outline
 					cell.stroke.Thickness = on and 2 or 1
 					cell.btn.BackgroundColor3 = on
 						and themes.preset.inline:Lerp(themes.preset.accent, 0.3)
@@ -9571,7 +9622,10 @@
 							LineJoinMode = Enum.LineJoinMode.Miter
 						})
 
-						-- the preview now owns the whole tile (no caption strip to leave room for)
+						-- the preview owns the whole tile (no caption strip to leave room for).
+						-- Rarity rides the BORDER rather than a bottom bar like the skin picker's:
+						-- a bar would have to eat 3px of preview on an already-small tile, and the
+						-- surround reads just as clearly without touching the layout.
 						local vp = library:create("ViewportFrame", {
 							Parent = btn,
 							Name = "",
@@ -9599,8 +9653,17 @@
 						})
 						library:create("UICorner", { Parent = pip, CornerRadius = UDim.new(1, 0) })
 
+						-- resolved ONCE at build: the grade of a model never changes, and this
+						-- runs inside paint() which fires on every hover
+						local rcol, rname
+						if cfg.rarity then
+							local okr, c, n = pcall(cfg.rarity, child.Name)
+							if okr and typeof(c) == "Color3" then rcol, rname = c, n end
+						end
+
 						local cell = { name = child.Name, model = child, btn = btn,
-							vp = vp, pip = pip, stroke = stroke, built = false }
+							vp = vp, pip = pip, stroke = stroke,
+							rarity = rcol, tier = rname, built = false }
 						cfg.cells[#cfg.cells + 1] = cell
 
 						btn.MouseButton1Click:Connect(function()
@@ -9614,12 +9677,12 @@
 						-- hover names the model in the header and lifts its border, so you can
 						-- read the grid by sweeping across it instead of guessing at thumbnails
 						btn.MouseEnter:Connect(function()
-							hovered = cell.name
+							hovered, hovered_cell = cell.name, cell
 							paint(cell)
 							refresh_header()
 						end)
 						btn.MouseLeave:Connect(function()
-							if hovered == cell.name then hovered = nil end
+							if hovered == cell.name then hovered, hovered_cell = nil, nil end
 							paint(cell)
 							refresh_header()
 						end)
