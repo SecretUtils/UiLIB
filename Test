@@ -6170,13 +6170,54 @@
 					})
 				end
 
-				-- image preview area, fed via cfg.set_image (keeps aspect via Fit)
-				local preview = library:create("ImageLabel", {
+				-- Preview WELL: outline -> inline -> contrast body, the same lining every other
+				-- surface in this menu wears. The preview used to sit straight on the section
+				-- background with no edge of its own, so the item read as floating in a gap
+				-- rather than sitting on a screen.
+				local well = library:create("Frame", {
 					Parent = bg,
 					Name = "",
 					LayoutOrder = 2,
-					BackgroundTransparency = 1,
 					Size = dim2(1, 0, 0, cfg.height),
+					BorderSizePixel = 0,
+					BorderColor3 = rgb(0, 0, 0),
+					BackgroundColor3 = themes.preset.outline
+				}) library:apply_theme(well, "outline", "BackgroundColor3")
+
+				local well_inline = library:create("Frame", {
+					Parent = well,
+					Name = "",
+					Position = dim2(0, 1, 0, 1),
+					Size = dim2(1, -2, 1, -2),
+					BorderSizePixel = 0,
+					BorderColor3 = rgb(0, 0, 0),
+					BackgroundColor3 = themes.preset.inline
+				}) library:apply_theme(well_inline, "inline", "BackgroundColor3")
+
+				local well_body = library:create("Frame", {
+					Parent = well_inline,
+					Name = "",
+					Position = dim2(0, 1, 0, 1),
+					Size = dim2(1, -2, 1, -2),
+					ClipsDescendants = true,
+					BorderSizePixel = 0,
+					BorderColor3 = rgb(0, 0, 0),
+					BackgroundColor3 = rgb(255, 255, 255)
+				})
+				do
+					local g = library:create("UIGradient", {
+						Parent = well_body,
+						Rotation = 90,
+						Color = rgbseq{rgbkey(0, rgb(41, 41, 55)), rgbkey(1, rgb(35, 35, 47))}
+					}) library:apply_theme(g, "contrast", "Color")
+				end
+
+				-- image preview, fed via cfg.set_image (keeps aspect via Fit)
+				local preview = library:create("ImageLabel", {
+					Parent = well_body,
+					Name = "",
+					BackgroundTransparency = 1,
+					Size = dim2(1, 0, 1, 0),
 					ScaleType = Enum.ScaleType.Fit,
 					BorderSizePixel = 0,
 					Image = "",
@@ -6225,6 +6266,76 @@
 					SortOrder = Enum.SortOrder.LayoutOrder
 				})
 
+				-- ── 3D PREVIEW ──────────────────────────────────────────────────────────
+				-- set_model(model, options) swaps the flat icon for a live ViewportFrame of the
+				-- real model: a clone, anchored, framed once off its own bounding box, and
+				-- turned slowly so the shape reads. Drag inside it to orbit; let go and it
+				-- resumes turning.
+				--
+				-- options.dress(clone) runs on the CLONE before it's framed. That callback is
+				-- what keeps this element game-agnostic — the library never has to know what a
+				-- "skin" is; the caller applies whatever it wants to the copy.
+				--
+				-- Everything is built LAZILY and the driver returns immediately unless the
+				-- viewport is both visible and on an enabled ScreenGui, so a box that never
+				-- shows a model costs nothing.
+				local STRIP3D = {
+					Script = true, LocalScript = true, ModuleScript = true,
+					Sound = true, ParticleEmitter = true, Trail = true, Beam = true,
+					PointLight = true, SpotLight = true, SurfaceLight = true,
+					Smoke = true, Fire = true, Sparkles = true,
+					ClickDetector = true, ProximityPrompt = true,
+					BillboardGui = true, SurfaceGui = true,
+				}
+				local vp, vp_world, vp_model, vp_base, vp_sg
+				local vp_rot, vp_drag, vp_dragx, vp_dragrot = 0, false, 0, 0
+
+				local function ensure_vp()
+					if vp then return end
+					vp = library:create("ViewportFrame", {
+						Parent = well_body,
+						Name = "",
+						Active = true,
+						Visible = false,
+						BackgroundTransparency = 1,
+						Size = dim2(1, 0, 1, 0),
+						BorderSizePixel = 0,
+						Ambient = rgb(190, 190, 190),
+						LightColor = rgb(255, 255, 255),
+						LightDirection = vec3(-0.6, -1, -0.4)
+					})
+					library:connection(vp.InputBegan, function(input)
+						if input.UserInputType == Enum.UserInputType.MouseButton1
+							or input.UserInputType == Enum.UserInputType.Touch then
+							vp_drag = true; vp_dragx = input.Position.X; vp_dragrot = vp_rot
+						end
+					end)
+					library:connection(uis.InputChanged, function(input)
+						if vp_drag and (input.UserInputType == Enum.UserInputType.MouseMovement
+							or input.UserInputType == Enum.UserInputType.Touch) then
+							vp_rot = vp_dragrot + (input.Position.X - vp_dragx) * 0.6
+						end
+					end)
+					library:connection(uis.InputEnded, function(input)
+						if input.UserInputType == Enum.UserInputType.MouseButton1
+							or input.UserInputType == Enum.UserInputType.Touch then vp_drag = false end
+					end)
+					library:connection(run.RenderStepped, function(dt)
+						if not (vp.Visible and vp_model and vp_base) then return end
+						if not vp_sg then vp_sg = vp:FindFirstAncestorWhichIsA("ScreenGui") end
+						if vp_sg and not vp_sg.Enabled then return end
+						if not vp_drag then vp_rot = vp_rot + (dt or 1 / 60) * 35 end
+						-- the clone was re-centred on the origin at build, so a plain spin
+						-- about Y turns it in place no matter where the model was authored
+						pcall(function() vp_model:PivotTo(angle(0, rad(vp_rot), 0) * vp_base) end)
+					end)
+				end
+
+				local function clear_model()
+					if vp_world then pcall(function() vp_world:Destroy() end) end
+					vp_world, vp_model, vp_base = nil, nil, nil
+				end
+
 				cfg.image = preview
 				cfg.caption = caption
 				cfg.holder = elements
@@ -6232,6 +6343,65 @@
 
 				function cfg.set_image(id)
 					preview.Image = (id and id ~= "" and tostring(id)) or ""
+					preview.Visible = true
+					if vp then vp.Visible = false end
+					clear_model()
+				end
+
+				-- nil model = fall back to whatever image is loaded
+				function cfg.set_model(model, options)
+					options = options or {}
+					ensure_vp()
+					clear_model()
+					if not model then
+						vp.Visible = false
+						preview.Visible = true
+						return
+					end
+					local ok = pcall(function()
+						local clone = model:Clone()
+						for _, d in ipairs(clone:GetDescendants()) do
+							if STRIP3D[d.ClassName] then
+								d:Destroy()
+							elseif d:IsA("BasePart") then
+								d.Anchored = true
+								d.CanCollide = false; d.CanQuery = false; d.CanTouch = false
+								d.CastShadow = false
+							end
+						end
+						if options.dress then pcall(options.dress, clone) end
+
+						local world = Instance.new("WorldModel")
+						world.Parent = vp
+						clone.Parent = world
+
+						local centre, size
+						if clone:IsA("Model") then
+							local bb; bb, size = clone:GetBoundingBox(); centre = bb.Position
+						elseif clone:IsA("BasePart") then
+							centre, size = clone.Position, clone.Size
+						else
+							world:Destroy(); error("not a model")
+						end
+						if size.Magnitude < 0.1 then size = vec3(2, 2, 2) end
+						-- re-centre on the origin so the spin has a sane axis: an item authored
+						-- far from 0,0,0 would otherwise swing around in a huge arc
+						clone:PivotTo(clone:GetPivot() - centre)
+
+						local cam = Instance.new("Camera")
+						cam.FieldOfView = 40
+						cam.Parent = vp
+						vp.CurrentCamera = cam
+						local dist = (size.Magnitude * 0.5) / tan(rad(cam.FieldOfView * 0.5)) * 1.25
+						cam.CFrame = CFrame.lookAt(vec3(1, 0.45, 1).Unit * dist, vec3())
+
+						vp_world, vp_model, vp_base = world, clone, clone:GetPivot()
+					end)
+					if not ok then
+						vp.Visible = false; preview.Visible = true; clear_model(); return
+					end
+					preview.Visible = false
+					vp.Visible = true
 				end
 
 				function cfg.set_caption(text, color)
@@ -6241,8 +6411,8 @@
 				end
 
 				function cfg.set_preview_visible(v)
-					preview.Visible = v and true or false
-					preview.Size = dim2(1, 0, 0, v and cfg.height or 0)
+					well.Visible = v and true or false
+					well.Size = dim2(1, 0, 0, v and cfg.height or 0)
 				end
 
 				return setmetatable(cfg, library)
@@ -9322,6 +9492,11 @@
 					-- rather than a map so the caller can pattern-match families of names
 					-- instead of enumerating every one. `rank` is optional — see TIER_RANK.
 					rarity   = options.rarity,
+					-- optional include(name) -> boolean, to drop entries from the grid (e.g.
+					-- collapsing skin variants into their base model). It's a predicate rather
+					-- than a pre-filtered list because `source` is a live Instance folder and
+					-- the caller has no way to hand us a subset of one.
+					include  = options.include,
 					callback = options.callback or function() end,
 					cells    = {},
 					selected = {},
@@ -9615,7 +9790,14 @@
 				}
 				local entries = {}
 				for _, child in ipairs(cfg.source:GetChildren()) do
-					if child:IsA("Model") or child:IsA("BasePart") then
+					local keep = child:IsA("Model") or child:IsA("BasePart")
+					if keep and cfg.include then
+						-- fail OPEN: a predicate that throws must cost one cell, not the
+						-- whole grid, which is what a silently empty picker would look like
+						local oki, want = pcall(cfg.include, child.Name)
+						if oki then keep = want and true or false end
+					end
+					if keep then
 						-- resolved ONCE here: the grade of a model never changes, and paint()
 						-- (which reads it) fires on every hover
 						local rcol, rname, rank
