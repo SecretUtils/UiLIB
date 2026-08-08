@@ -9289,12 +9289,18 @@
 					flag     = options.flag or "model_grid",
 					source   = options.source,
 					height   = options.height or 210,
-					columns  = options.columns or 5,
+					columns  = options.columns or 4,
 					callback = options.callback or function() end,
 					cells    = {},
 					selected = {},
 					visible  = true,
 				}
+
+				-- "LargeMilitaryBox" -> "Large Military Box". Model names are PascalCase and
+				-- unreadable at a glance; the header has room to spell them out properly.
+				local function pretty(s)
+					return (tostring(s):gsub("(%l)(%u)", "%1 %2"))
+				end
 
 				-- classes that are pure noise inside a preview: they'd run code, play audio,
 				-- emit particles or draw a GUI in a 44px thumbnail. Decals/Textures/
@@ -9343,12 +9349,43 @@
 					Color = rgbseq{rgbkey(0, rgb(41, 41, 55)), rgbkey(1, rgb(35, 35, 47))}
 				}) library:apply_theme(grad, "contrast", "Color")
 
+				-- Header. The cells carry NO caption: at four-to-a-row a model name is wider
+				-- than the tile, so a per-cell label can only ever be "LargeMilit..." — which
+				-- reads as noise. The name lives up here instead, where there's room to spell
+				-- it out, and follows whatever you're hovering. Idle, it reports the count.
+				local header = library:create("TextLabel", {
+					Parent = bg,
+					Name = "",
+					FontFace = library.font,
+					TextColor3 = themes.preset.text,
+					Text = "",
+					Position = dim2(0, 6, 0, 2),
+					Size = dim2(1, -12, 0, 14),
+					BackgroundTransparency = 1,
+					BorderSizePixel = 0,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					TextTruncate = Enum.TextTruncate.AtEnd,
+					TextSize = 12,
+					BackgroundColor3 = rgb(255, 255, 255)
+				}) library:apply_theme(header, "text", "TextColor3")
+
+				local hrule = library:create("Frame", {
+					Parent = bg,
+					Name = "",
+					Position = dim2(0, 0, 0, 17),
+					Size = dim2(1, 0, 0, 1),
+					BorderSizePixel = 0,
+					BorderColor3 = rgb(0, 0, 0),
+					BackgroundColor3 = themes.preset.inline
+				}) library:apply_theme(hrule, "inline", "BackgroundColor3")
+
 				local sf = library:create("ScrollingFrame", {
 					Parent = bg,
 					Name = "",
 					Active = true,
 					BackgroundTransparency = 1,
-					Size = dim2(1, 0, 1, 0),
+					Position = dim2(0, 0, 0, 18),
+					Size = dim2(1, 0, 1, -18),
 					BorderSizePixel = 0,
 					BorderColor3 = rgb(0, 0, 0),
 					MidImage = "rbxassetid://103468666327206",
@@ -9364,30 +9401,49 @@
 
 				library:create("UIPadding", {
 					Parent = sf,
-					PaddingTop = dim(0, 4), PaddingBottom = dim(0, 4),
-					PaddingLeft = dim(0, 4), PaddingRight = dim(0, 4)
+					PaddingTop = dim(0, 5), PaddingBottom = dim(0, 5),
+					PaddingLeft = dim(0, 5), PaddingRight = dim(0, 5)
 				})
 
 				local grid = library:create("UIGridLayout", {
 					Parent = sf,
-					CellSize = dim2(0, 44, 0, 56),
-					CellPadding = dim2(0, 4, 0, 4),
+					CellSize = dim2(0, 44, 0, 44),
+					CellPadding = dim2(0, 5, 0, 5),
 					SortOrder = Enum.SortOrder.LayoutOrder
 				})
 
 				-- grow the cells so `columns` of them exactly span the row, instead of
-				-- leaving a ragged gap down the right edge
+				-- leaving a ragged gap down the right edge. Square now that the caption is gone,
+				-- so the whole tile is preview.
 				local function fit()
-					local w = sf.AbsoluteWindowSize.X - 8
+					local w = sf.AbsoluteWindowSize.X - 10
 					if w <= 8 then return end
-					local pad = 4
+					local pad = 5
 					local size = math.floor((w - pad * (cfg.columns - 1)) / cfg.columns)
 					if size < 24 then size = 24 end
-					grid.CellSize = dim2(0, size, 0, size + 12)   -- +12 = the name caption
+					grid.CellSize = dim2(0, size, 0, size)
 				end
 				sf:GetPropertyChangedSignal("AbsoluteWindowSize"):Connect(fit)
 
+				-- header text: the hovered model, else how many are picked
+				local hovered
+				local function refresh_header()
+					if hovered then
+						header.Text = pretty(hovered)
+						header.TextColor3 = themes.preset.accent
+						return
+					end
+					local n = 0
+					for _ in pairs(cfg.selected) do n = n + 1 end
+					local total = #cfg.cells
+					header.Text = (n > 0)
+						and (n .. " of " .. total .. " selected")
+						or  (total .. " available  -  none picked")
+					header.TextColor3 = themes.preset.text
+				end
+
 				if not cfg.source then
+					header.Text = "unavailable"
 					library:create("TextLabel", {
 						Parent = sf,
 						Name = "",
@@ -9416,11 +9472,20 @@
 					cfg.callback(out)
 				end
 
+				-- Selection has to read at a glance across a 4-wide grid of small tiles, so it's
+				-- three cues at once: accent border, the body tinted toward the accent, and a
+				-- filled corner pip. A stroke colour change alone was invisible at this size.
 				local function paint(cell)
 					local on = cfg.selected[cell.name] == true
-					cell.stroke.Color = on and themes.preset.accent or themes.preset.outline
+					local hot = cell.name == hovered
+					cell.stroke.Color = on and themes.preset.accent
+						or (hot and themes.preset.text or themes.preset.outline)
 					cell.stroke.Thickness = on and 2 or 1
-					cell.label.TextColor3 = on and themes.preset.accent or themes.preset.text
+					cell.btn.BackgroundColor3 = on
+						and themes.preset.inline:Lerp(themes.preset.accent, 0.3)
+						or  themes.preset.inline
+					cell.pip.Visible = on
+					cell.pip.BackgroundColor3 = themes.preset.accent
 				end
 
 				-- Build a cell's 3D scene. Everything is anchored and the camera is placed
@@ -9471,9 +9536,7 @@
 					-- appearing reads as it settling into place rather than popping
 					cell.vp.ImageTransparency = 1
 					cell.vp.Position = dim2(0, 3, 0, 11)
-					cell.label.TextTransparency = 1
 					library:tween(cell.vp, {ImageTransparency = 0, Position = dim2(0, 3, 0, 3)})
-					library:tween(cell.label, {TextTransparency = 0})
 				end
 
 				local function teardown(cell)
@@ -9508,12 +9571,13 @@
 							LineJoinMode = Enum.LineJoinMode.Miter
 						})
 
+						-- the preview now owns the whole tile (no caption strip to leave room for)
 						local vp = library:create("ViewportFrame", {
 							Parent = btn,
 							Name = "",
 							BackgroundTransparency = 1,
 							Position = dim2(0, 3, 0, 3),
-							Size = dim2(1, -6, 1, -18),
+							Size = dim2(1, -6, 1, -6),
 							BorderSizePixel = 0,
 							ImageTransparency = 1,
 							Ambient = rgb(190, 190, 190),
@@ -9521,31 +9585,43 @@
 							LightDirection = Vector3.new(-0.6, -1, -0.4)
 						})
 
-						local label = library:create("TextLabel", {
+						-- selected marker: small accent square in the top-right corner
+						local pip = library:create("Frame", {
 							Parent = btn,
 							Name = "",
-							FontFace = library.font,
-							TextColor3 = themes.preset.text,
-							Text = child.Name,
-							AnchorPoint = vec2(0.5, 1),
-							Position = dim2(0.5, 0, 1, -1),
-							Size = dim2(1, -4, 0, 12),
-							BackgroundTransparency = 1,
+							AnchorPoint = vec2(1, 0),
+							Position = dim2(1, -3, 0, 3),
+							Size = dim2(0, 6, 0, 6),
 							BorderSizePixel = 0,
-							TextTruncate = Enum.TextTruncate.AtEnd,
-							TextSize = 9,
-							BackgroundColor3 = rgb(255, 255, 255)
+							BorderColor3 = rgb(0, 0, 0),
+							Visible = false,
+							BackgroundColor3 = themes.preset.accent
 						})
+						library:create("UICorner", { Parent = pip, CornerRadius = UDim.new(1, 0) })
 
 						local cell = { name = child.Name, model = child, btn = btn,
-							vp = vp, label = label, stroke = stroke, built = false }
+							vp = vp, pip = pip, stroke = stroke, built = false }
 						cfg.cells[#cfg.cells + 1] = cell
 
 						btn.MouseButton1Click:Connect(function()
 							cfg.selected[cell.name] = not cfg.selected[cell.name] or nil
 							paint(cell)
+							refresh_header()
 							commit()
 							library:ui_sound("click")
+						end)
+
+						-- hover names the model in the header and lifts its border, so you can
+						-- read the grid by sweeping across it instead of guessing at thumbnails
+						btn.MouseEnter:Connect(function()
+							hovered = cell.name
+							paint(cell)
+							refresh_header()
+						end)
+						btn.MouseLeave:Connect(function()
+							if hovered == cell.name then hovered = nil end
+							paint(cell)
+							refresh_header()
 						end)
 
 						paint(cell)
@@ -9594,6 +9670,7 @@
 						for _, v in ipairs(list) do cfg.selected[tostring(v)] = true end
 					end
 					for _, cell in ipairs(cfg.cells) do paint(cell) end
+					refresh_header()
 					commit()
 				end
 
