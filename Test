@@ -1020,15 +1020,42 @@
 				local vp = (root and root.AbsoluteSize) or vec2(1920, 1080)
 				local gap = 2
 
-				local x = align_right and (ap.X + asz.X - psz.X) or ap.X
-				local y = ap.Y + asz.Y + gap
-				if psz.Y > 0 and y + psz.Y > vp.Y then
-					local above = ap.Y - psz.Y - gap
-					y = (above >= 0) and above or max(0, vp.Y - psz.Y)
-				end
+				-- AbsolutePosition is ALWAYS reported in inset space (a thing drawn at the very
+				-- top of the screen reads Y = -36), but a Position offset on an IgnoreGuiInset
+				-- ScreenGui — which is what every popup here is parented to — is in RENDER space.
+				-- Feeding one straight into the other therefore draws the popup a full topbar
+				-- height too high, which is why it landed ON the swatch/button that opened it
+				-- instead of under it. Convert into the frame's own space first.
+				local ins = 0
+				local sg = frame:FindFirstAncestorWhichIsA("ScreenGui")
+				if sg and sg.IgnoreGuiInset then ins = gui_service:GetGuiInset().Y end
+				local ax, ay = ap.X, ap.Y + ins
+
+				local x = align_right and (ax + asz.X - psz.X) or ax
 				if psz.X > 0 then x = clamp(x, 0, max(0, vp.X - psz.X)) end
 
-				frame.Position = dim2(0, x, 0, y)
+				-- 1. straight down off the anchor's BOTTOM edge (a dropdown always wants this)
+				local below = ay + asz.Y + gap
+				if psz.Y <= 0 or below + psz.Y <= vp.Y then
+					frame.Position = dim2(0, x, 0, below)
+					return
+				end
+				-- 2. no room under it, so flip above its TOP edge
+				local above = ay - psz.Y - gap
+				if above >= 0 then
+					frame.Position = dim2(0, x, 0, above)
+					return
+				end
+				-- 3. taller than the room on either side of it: sit BESIDE the anchor rather
+				-- than clamping onto it. Clicking the anchor again is how a popup is dismissed,
+				-- so one that covers its own anchor is one you can't close.
+				local y = clamp(ay, 0, max(0, vp.Y - psz.Y))
+				local right = ax + asz.X + gap
+				if right + psz.X <= vp.X then
+					frame.Position = dim2(0, right, 0, y)
+				else
+					frame.Position = dim2(0, max(0, ax - psz.X - gap), 0, y)
+				end
 			end
 
 			-- ONE tracked popup at a time — the library already enforces that with
