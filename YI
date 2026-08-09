@@ -2709,7 +2709,10 @@ return LPH_NO_VIRTUALIZE(function()
 					local FRONT = 180
 					cfg.rotation = FRONT
 					cfg.target_rotation = FRONT
+					cfg.pitch = 0
+					cfg.target_pitch = 0
 					local dragging, drag_start_x, drag_start_rot = false, 0, FRONT
+					local drag_start_y, drag_start_pitch = 0, 0
 
 					items.viewportframe.Active = true
 					library:connection(items.viewportframe.InputBegan, function(input)
@@ -2718,6 +2721,8 @@ return LPH_NO_VIRTUALIZE(function()
 							dragging = true
 							drag_start_x = input.Position.X
 							drag_start_rot = cfg.rotation
+							drag_start_y = input.Position.Y
+							drag_start_pitch = cfg.pitch
 						end
 					end)
 					library:connection(uis.InputChanged, function(input)
@@ -2725,6 +2730,8 @@ return LPH_NO_VIRTUALIZE(function()
 							or input.UserInputType == Enum.UserInputType.Touch) then
 							cfg.rotation = drag_start_rot + (input.Position.X - drag_start_x) * 0.6
 							cfg.target_rotation = cfg.rotation
+							cfg.pitch = math.clamp(drag_start_pitch + (input.Position.Y - drag_start_y) * 0.6, -85, 85)
+							cfg.target_pitch = cfg.pitch
 						end
 					end)
 					library:connection(uis.InputEnded, function(input)
@@ -2732,6 +2739,7 @@ return LPH_NO_VIRTUALIZE(function()
 							or input.UserInputType == Enum.UserInputType.Touch) then
 							dragging = false
 							cfg.target_rotation = FRONT
+							cfg.target_pitch = 0
 						end
 					end)
 
@@ -2956,11 +2964,15 @@ return LPH_NO_VIRTUALIZE(function()
 
 					library:connection(run.RenderStepped, function(dt)
 						if not (character and character.PrimaryPart) then return end
+						if cfg._builder_on == false then return end
 						if not dragging then
-							cfg.rotation = cfg.rotation
-								+ (cfg.target_rotation - cfg.rotation) * math.clamp((dt or 1/60) * 8, 0, 1)
+							local ease = math.clamp((dt or 1/60) * 8, 0, 1)
+							cfg.rotation = cfg.rotation + (cfg.target_rotation - cfg.rotation) * ease
+							cfg.pitch = cfg.pitch + (cfg.target_pitch - cfg.pitch) * ease
 						end
-						character:SetPrimaryPartCFrame(cfr(Vector3.new(0, 0.2, -7.5)) * angle(0, math.rad(cfg.rotation), 0))
+						character:SetPrimaryPartCFrame(cfr(Vector3.new(0, 0.2, -7.5))
+							* angle(math.rad(cfg.pitch), 0, 0)
+							* angle(0, math.rad(cfg.rotation), 0))
 						update_preview_box()
 						update_preview_overlays()
 					end)
@@ -5676,6 +5688,7 @@ return LPH_NO_VIRTUALIZE(function()
 				}
 				local vp, vp_world, vp_model, vp_base, vp_sg
 				local vp_rot, vp_drag, vp_dragx, vp_dragrot = 0, false, 0, 0
+				local vp_pitch, vp_dragy, vp_dragpitch = 0, 0, 0
 
 				local function ensure_vp()
 					if vp then return end
@@ -5695,12 +5708,14 @@ return LPH_NO_VIRTUALIZE(function()
 						if input.UserInputType == Enum.UserInputType.MouseButton1
 							or input.UserInputType == Enum.UserInputType.Touch then
 							vp_drag = true; vp_dragx = input.Position.X; vp_dragrot = vp_rot
+							vp_dragy = input.Position.Y; vp_dragpitch = vp_pitch
 						end
 					end)
 					library:connection(uis.InputChanged, function(input)
 						if vp_drag and (input.UserInputType == Enum.UserInputType.MouseMovement
 							or input.UserInputType == Enum.UserInputType.Touch) then
 							vp_rot = vp_dragrot + (input.Position.X - vp_dragx) * 0.6
+							vp_pitch = math.clamp(vp_dragpitch + (input.Position.Y - vp_dragy) * 0.6, -85, 85)
 						end
 					end)
 					library:connection(uis.InputEnded, function(input)
@@ -5712,7 +5727,7 @@ return LPH_NO_VIRTUALIZE(function()
 						if not vp_sg then vp_sg = vp:FindFirstAncestorWhichIsA("ScreenGui") end
 						if vp_sg and not vp_sg.Enabled then return end
 						if not vp_drag then vp_rot = vp_rot + (dt or 1 / 60) * 35 end
-						pcall(function() vp_model:PivotTo(angle(0, rad(vp_rot), 0) * vp_base) end)
+						pcall(function() vp_model:PivotTo(angle(rad(vp_pitch), 0, 0) * angle(0, rad(vp_rot), 0) * vp_base) end)
 					end)
 				end
 
