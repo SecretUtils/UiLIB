@@ -999,12 +999,63 @@
 				return connection 
 			end
 
-			function library:apply_stroke(parent) 
+			-- ── POPUP ANCHORING ────────────────────────────────────────────────────
+			-- Floating popups (colorpicker, dropdown list, keybind selector, "+" panel) live on
+			-- the ScreenGui rather than inside their section, so they can paint over everything.
+			-- The cost is that a popup has no idea where its element went, and each one used to
+			-- set Position ONCE on open — so scrolling slid the element out from under it while
+			-- the popup sat where it was. The hardcoded "+17" / "+22" drops were guesses at row
+			-- height too, which is how a picker ended up ON TOP of the swatch that opened it,
+			-- with nothing left to click to dismiss it.
+			--
+			-- anchor_popup measures instead of guessing: directly under the element, flipped
+			-- above when it would run off the bottom, clamped horizontally so it can't leave the
+			-- screen. track_popup then re-runs it every frame until the popup closes, which is
+			-- what actually locks the two together while a section scrolls.
+			function library:anchor_popup(frame, anchor, align_right)
+				if not (frame and anchor and frame.Parent and anchor.Parent) then return end
+				local ap, asz = anchor.AbsolutePosition, anchor.AbsoluteSize
+				local psz = frame.AbsoluteSize
+				local root = frame.Parent
+				local vp = (root and root.AbsoluteSize) or vec2(1920, 1080)
+				local gap = 2
+
+				local x = align_right and (ap.X + asz.X - psz.X) or ap.X
+				local y = ap.Y + asz.Y + gap
+				if psz.Y > 0 and y + psz.Y > vp.Y then
+					local above = ap.Y - psz.Y - gap
+					y = (above >= 0) and above or max(0, vp.Y - psz.Y)
+				end
+				if psz.X > 0 then x = clamp(x, 0, max(0, vp.X - psz.X)) end
+
+				frame.Position = dim2(0, x, 0, y)
+			end
+
+			-- ONE tracked popup at a time — the library already enforces that with
+			-- current_element_open — so this is a single driver, not a connection per element.
+			function library:track_popup(frame, anchor, align_right)
+				library.tracked_popup = frame and {frame = frame, anchor = anchor, right = align_right} or nil
+				if frame then library:anchor_popup(frame, anchor, align_right) end
+			end
+
+			library:connection(run.RenderStepped, function()
+				local t = library.tracked_popup
+				if not t then return end
+				-- stop tracking the moment it closes or is destroyed, so an off-screen popup
+				-- costs nothing
+				if not (t.frame.Parent and t.frame.Visible and t.anchor.Parent) then
+					library.tracked_popup = nil
+					return
+				end
+				library:anchor_popup(t.frame, t.anchor, t.right)
+			end)
+
+			function library:apply_stroke(parent)
 				local stroke = library:create("UIStroke", {
 					Parent = parent,
-					Color = themes.preset.text_outline, 
+					Color = themes.preset.text_outline,
 					LineJoinMode = Enum.LineJoinMode.Miter
-				}) 
+				})
 				
 				library:apply_theme(stroke, "text_outline", "Color")
 			end
@@ -7227,8 +7278,11 @@
 							library.current_element_open.open = false
 						end
 						library.current_element_open = cfg
-						-- open just below the "+", nudged left so the panel stays on screen
-						window.Position = dim2(0, plus_button.AbsolutePosition.X - window.AbsoluteSize.X + 14, 0, plus_button.AbsolutePosition.Y + 17)
+						-- below the "+" and RIGHT-aligned to it, so a wide panel opens back into
+						-- the menu rather than off the edge; tracked so it follows a scroll
+						library:track_popup(window, plus_button, true)
+					elseif library.tracked_popup and library.tracked_popup.frame == window then
+						library.tracked_popup = nil
 					end
 				end
 
@@ -7800,9 +7854,13 @@
 						end
 
 						library.current_element_open = cfg
-						colorpicker_holder.Position = dim2(0, colorpicker_button.AbsolutePosition.X + 1, 0, colorpicker_button.AbsolutePosition.Y + 17)
+						library:track_popup(colorpicker_holder, colorpicker_button)
+					else
+						if library.tracked_popup and library.tracked_popup.frame == colorpicker_holder then
+							library.tracked_popup = nil
+						end
 					end
-				end 
+				end
 
 				colorpicker_button.MouseButton1Click:Connect(function()
 					library:ui_sound("click")		
@@ -8217,17 +8275,19 @@
 				-- init 
 					function cfg.set_visible(bool)
 						keybind_selector.Visible = bool
-						keybind_selector.Position = dim2(0, element_outline.AbsolutePosition.X + 1, 0, element_outline.AbsolutePosition.Y + 17)
 
-						if bool then 
-							if library.current_element_open and library.current_element_open ~= cfg then 
+						if bool then
+							if library.current_element_open and library.current_element_open ~= cfg then
 								library.current_element_open.set_visible(false)
-								library.current_element_open.open = false 
+								library.current_element_open.open = false
 							end
 
-							library.current_element_open = cfg 
+							library.current_element_open = cfg
+							library:track_popup(keybind_selector, element_outline)
+						elseif library.tracked_popup and library.tracked_popup.frame == keybind_selector then
+							library.tracked_popup = nil
 						end
-					end 
+					end
 
 					function cfg.set_mode(mode) 
 						cfg.mode = mode 
@@ -8824,7 +8884,11 @@
 
 						dropdown_holder.Size = dim2(0, dropdown.AbsoluteSize.X, 0, dropdown_holder.Size.Y.Offset)
 						fit_holder()   -- re-measure on every open: items can be refreshed while closed
-						dropdown_holder.Position = dim2(0, dropdown.AbsolutePosition.X + 1, 0, dropdown.AbsolutePosition.Y + 22)
+						-- anchored AFTER fit_holder: the flip-above check needs the real height,
+						-- and a list that just grew would otherwise be measured at its old size
+						library:track_popup(dropdown_holder, dropdown)
+					elseif library.tracked_popup and library.tracked_popup.frame == dropdown_holder then
+						library.tracked_popup = nil
 					end
 				end
 
