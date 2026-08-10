@@ -2797,19 +2797,28 @@ return LPH_NO_VIRTUALIZE(function()
 					}
 					local mat_saved = {}
 
+					local function cflag(n)
+						if cfg._ctx == "ai" then return "AI_" .. n end
+						return n
+					end
+					local function cmaster()
+						if cfg._ctx == "ai" then return flags["ESP_AI"] end
+						return flags["Enabled"]
+					end
+
 					local function update_preview_overlays()
 						local o = cfg.objects
 						if not (character and o) then return end
 						if not cfg._preview_sg then cfg._preview_sg = items.viewportframe:FindFirstAncestorWhichIsA("ScreenGui") end
 						if cfg._preview_sg and not cfg._preview_sg.Enabled then return end
-						local enabled = flags["Enabled"]
+						local enabled = cmaster()
 						local B = cfg._show
 
 						if o.chams_box then
 							local cham_on = enabled and (B and B.chams) == true
 							o.chams_box.Visible = cham_on
 							if cham_on then
-								local fc = flags["Chams_Fill_Color"]
+								local fc = flags[cflag("Chams_Fill_Color")]
 								if fc and fc.Color then
 									o.chams_box.BackgroundColor3 = fc.Color
 									local st = o.chams_box:FindFirstChildOfClass("UIStroke")
@@ -2818,23 +2827,23 @@ return LPH_NO_VIRTUALIZE(function()
 							end
 						end
 						if o.chams then
-							if not B and enabled and flags["Chams"] then
+							if not B and enabled and flags[cflag("Chams")] then
 								o.chams.Adornee = character
-								local oc = flags["Chams_Outline"];     if oc and oc.Color then o.chams.OutlineColor = oc.Color end
-								local fc = flags["Chams_Fill_Color"];  if fc and fc.Color then o.chams.FillColor    = fc.Color end
-								o.chams.OutlineTransparency = flags["Chams_Outline_On"] and (1 - (flags["Chams_Outline_Opacity"] or 100) / 100) or 1
-								o.chams.FillTransparency    = flags["Chams_Fill"]       and (1 - (flags["Chams_Fill_Opacity"]    or 100) / 100) or 1
+								local oc = flags[cflag("Chams_Outline")];     if oc and oc.Color then o.chams.OutlineColor = oc.Color end
+								local fc = flags[cflag("Chams_Fill_Color")];  if fc and fc.Color then o.chams.FillColor    = fc.Color end
+								o.chams.OutlineTransparency = flags[cflag("Chams_Outline_On")] and (1 - (flags[cflag("Chams_Outline_Opacity")] or 100) / 100) or 1
+								o.chams.FillTransparency    = flags[cflag("Chams_Fill")]       and (1 - (flags[cflag("Chams_Fill_Opacity")]    or 100) / 100) or 1
 								o.chams.Enabled = true
 							else
 								o.chams.Enabled = false
 							end
 						end
 
-						if enabled and flags["esp_mat_enabled"] then
-							local ok, mat = pcall(function() return Enum.Material[flags["esp_mat_choice"] or "Neon"] end)
+						if enabled and flags[cflag("esp_mat_enabled")] then
+							local ok, mat = pcall(function() return Enum.Material[flags[cflag("esp_mat_choice")] or "Neon"] end)
 							if not ok then mat = Enum.Material.Neon end
-							local col = (flags["esp_mat_color_on"] and flags["esp_mat_color"] and flags["esp_mat_color"].Color) or nil
-							local tr  = math.clamp((flags["esp_mat_transp"] or 0) / 100, 0, 0.99)
+							local col = (flags[cflag("esp_mat_color_on")] and flags[cflag("esp_mat_color")] and flags[cflag("esp_mat_color")].Color) or nil
+							local tr  = math.clamp((flags[cflag("esp_mat_transp")] or 0) / 100, 0, 0.99)
 							for _, p in ipairs(character:GetDescendants()) do
 								if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
 									if mat_saved[p] == nil then mat_saved[p] = {p.Material, p.Color, p.Transparency} end
@@ -2852,12 +2861,12 @@ return LPH_NO_VIRTUALIZE(function()
 
 						if o.head_dot then
 							local head = character:FindFirstChild("Head")
-							local sp = (enabled and ((B and B.head_dot) or (not B and flags["HeadDot"])) and head) and vp_project(head.Position) or nil
+							local sp = (enabled and ((B and B.head_dot) or (not B and flags[cflag("HeadDot")])) and head) and vp_project(head.Position) or nil
 							if sp then
-								local sz = (flags["headdot_size"] or 4) * 1.6
+								local sz = (flags[cflag("headdot_size")] or 4) * 1.6
 								o.head_dot.Size = dim2(0, sz, 0, sz)
 								o.head_dot.Position = dim2(0, sp.X, 0, sp.Y)
-								local c = flags["HeadDot_Color"]; if c and c.Color then o.head_dot.BackgroundColor3 = c.Color end
+								local c = flags[cflag("HeadDot_Color")]; if c and c.Color then o.head_dot.BackgroundColor3 = c.Color end
 								o.head_dot.Visible = true
 							else
 								o.head_dot.Visible = false
@@ -2868,7 +2877,7 @@ return LPH_NO_VIRTUALIZE(function()
 							local skel_on = enabled and (B and B.skeleton) == true
 							o.skel_box.Visible = skel_on
 							if skel_on then
-								local col = flags["Skeleton_Color"]
+								local col = flags[cflag("Skeleton_Color")]
 								if col and col.Color then
 									o.skel_box.BackgroundColor3 = col.Color
 									local st = o.skel_box:FindFirstChildOfClass("UIStroke")
@@ -2877,9 +2886,9 @@ return LPH_NO_VIRTUALIZE(function()
 							end
 						end
 						if o.skel_lines then
-							if not B and enabled and flags["Skeleton"] then
-								local col = flags["Skeleton_Color"]; col = (col and col.Color) or rgb(255, 255, 255)
-								local th = flags["skel_thickness"] or 2
+							if not B and enabled and flags[cflag("Skeleton")] then
+								local col = flags[cflag("Skeleton_Color")]; col = (col and col.Color) or rgb(255, 255, 255)
+								local th = flags[cflag("skel_thickness")] or 2
 								for i, bone in ipairs(PREVIEW_BONES) do
 									local line = o.skel_lines[i]
 									local a = character:FindFirstChild(bone[1])
@@ -2917,17 +2926,17 @@ return LPH_NO_VIRTUALIZE(function()
 						end
 
 						if o.ammo_text then
-							local on = flags["Ammo_Counter"] == true
+							local on = flags[cflag("Ammo_Counter")] == true
 							o.ammo_text.Visible = on
 							if on then
-								local tc = flags["Ammo_Counter_Color"]
+								local tc = flags[cflag("Ammo_Counter_Color")]
 								if tc and tc.Color then o.ammo_text.TextColor3 = tc.Color end
 								o.ammo_text.Text = "21 / 30"
 							end
 						end
 
 						if o.holder then
-							local box_on = (B and B.box == true) or (not B and flags["Boxes"] == true)
+							local box_on = (B and B.box == true) or (not B and flags[cflag("Boxes")] == true)
 							if not o.box_fill then
 								local f = library:create("Frame", {
 									Parent = o.holder; Name = "\0"; ZIndex = 1; Visible = false;
@@ -2941,12 +2950,12 @@ return LPH_NO_VIRTUALIZE(function()
 								o.box_color_grad = library:create("UIGradient", {Parent = o.box_color; Rotation = 90})
 							end
 							if box_on then
-								local c1 = (flags["Box_Color"] and flags["Box_Color"].Color) or rgb(255, 255, 255)
-								local c2 = (flags["Box_Color_2"] and flags["Box_Color_2"].Color) or rgb(0, 0, 0)
-								local f1 = (flags["Box_Fill_Color"] and flags["Box_Fill_Color"].Color) or rgb(255, 255, 255)
-								local f2 = (flags["Box_Fill_Color_2"] and flags["Box_Fill_Color_2"].Color) or rgb(0, 0, 0)
-								local fillOp = math.clamp((flags["box_fill_opacity"] or 15) / 100, 0, 1)
-								local rot = (flags["Box_Animated"] == true) and ((tick() * 120) % 360) or 90
+								local c1 = (flags[cflag("Box_Color")] and flags[cflag("Box_Color")].Color) or rgb(255, 255, 255)
+								local c2 = (flags[cflag("Box_Color_2")] and flags[cflag("Box_Color_2")].Color) or rgb(0, 0, 0)
+								local f1 = (flags[cflag("Box_Fill_Color")] and flags[cflag("Box_Fill_Color")].Color) or rgb(255, 255, 255)
+								local f2 = (flags[cflag("Box_Fill_Color_2")] and flags[cflag("Box_Fill_Color_2")].Color) or rgb(0, 0, 0)
+								local fillOp = math.clamp((flags[cflag("box_fill_opacity")] or 15) / 100, 0, 1)
+								local rot = (flags[cflag("Box_Animated")] == true) and ((tick() * 120) % 360) or 90
 								o.box_fill_grad.Color = rgbseq{rgbkey(0, f1), rgbkey(1, f2)}
 								o.box_fill_grad.Rotation = rot
 								o.box_fill.BackgroundTransparency = 1 - fillOp
@@ -3504,6 +3513,7 @@ return LPH_NO_VIRTUALIZE(function()
 							{"bleeding", "BLEEDING",  rgb(200, 30, 60)},
 							{"stims",    "[G 4m53s]", rgb(80, 220, 120)},
 							{"looting",  "LOOTING",   rgb(255, 220, 50)},
+							{"lookat",   "[LOOK 42]", rgb(120, 200, 255)},
 							{"stats",    "[ STATS ]", rgb(200, 200, 200)},
 						}) do
 							objects[ def[1] ] = library:create( "TextLabel" , {
@@ -3612,7 +3622,12 @@ return LPH_NO_VIRTUALIZE(function()
 					local humanoid = character.Humanoid
 
 					local multiplier = humanoid.MaxHealth * math.abs(math.sin(tick() * 2)) / humanoid.MaxHealth
-					local color = flags[ "Health_Low" ].Color:Lerp( flags["Health_High"].Color, multiplier)
+					local lowf  = flags[cflag("Health_Low")]  or flags["Health_Low"]
+					local highf = flags[cflag("Health_High")] or flags["Health_High"]
+					local color = rgb(255, 255, 255)
+					if lowf and lowf.Color and highf and highf.Color then
+						color = lowf.Color:Lerp(highf.Color, multiplier)
+					end
 
 					if cfg._bar_horiz and cfg._bar_horiz.healthbar then
 						objects[ "healthbar" ].Size = UDim2.new(multiplier, -2, 1, -2)
@@ -3627,7 +3642,7 @@ return LPH_NO_VIRTUALIZE(function()
 				end
 
 				function cfg.refresh_elements( )
-					objects.holder.Parent = flags["Enabled"] and items.viewportframe or library.cache
+					objects.holder.Parent = cmaster() and items.viewportframe or library.cache
 
 					local temp = {
 						["Names"] = objects["name"];
@@ -3643,20 +3658,21 @@ return LPH_NO_VIRTUALIZE(function()
 					}
 
 					for flag,object in temp do
-						if flags[flag] ~= nil then
+						local v = flags[cflag(flag)]
+						if v ~= nil then
 							if type(object) == "table" then
-								object[1].TextColor3 = flags[flag].Color
+								if v.Color then object[1].TextColor3 = v.Color end
 							elseif cfg._chip_set and cfg._chip_set[object] then
 							else
-								object.Parent = flags[flag] and objects[ "holder" ] or library.cache
+								object.Parent = v and objects[ "holder" ] or library.cache
 							end
 						end
 					end
 
-					local is_corner = flags[ "Box_Type" ] == "Corner"
+					local is_corner = flags[cflag("Box_Type")] == "Corner"
 
 					local box_on
-					if cfg._show then box_on = cfg._show.box == true else box_on = flags["Boxes"] == true end
+					if cfg._show then box_on = cfg._show.box == true else box_on = flags[cflag("Boxes")] == true end
 
 					if box_on then
 						if is_corner then
@@ -3674,25 +3690,29 @@ return LPH_NO_VIRTUALIZE(function()
 						objects[ "box_outline" ].Parent = library.cache
 					end
 
-					objects[ "box_color" ].Color = flags["Box_Color"].Color
-
-					for _, corner in objects[ "corners" ]:GetChildren() do
-						corner.Frame.BackgroundColor3 = flags["Box_Color"].Color
+					do
+						local bc = flags[cflag("Box_Color")] or flags["Box_Color"]
+						if bc and bc.Color then
+							objects[ "box_color" ].Color = bc.Color
+							for _, corner in objects[ "corners" ]:GetChildren() do
+								corner.Frame.BackgroundColor3 = bc.Color
+							end
+						end
 					end
 
 					do
 						local hp_on
-						if cfg._show then hp_on = cfg._show.healthbar == true else hp_on = flags["Healthbar"] == true end
+						if cfg._show then hp_on = cfg._show.healthbar == true else hp_on = flags[cflag("Healthbar")] == true end
 						objects["healthbar_holder"].Parent = hp_on and objects["holder"] or library.cache
 					end
 
 					if objects["edition"] then
-						local ec = flags["ESP_Edition_Elite"]
+						local ec = flags[cflag("ESP_Edition_Elite")]
 						if ec and ec.Color then objects["edition"].TextColor3 = ec.Color end
 					end
 
 					do
-						local sel = flags["ESP_Status_Sel"]
+						local sel = flags[cflag("ESP_Status_Sel")]
 						local set = {}
 						if type(sel) == "table" then for _, v in ipairs(sel) do set[v] = true end
 						elseif type(sel) == "string" then set[sel] = true end
@@ -3705,11 +3725,12 @@ return LPH_NO_VIRTUALIZE(function()
 							{"bleeding", "Bleeding", "ESP_Bleed_Color"},
 							{"stims",   "Stims",   "ESP_Stim_Color"},
 							{"looting", "Looting", "ESP_Loot_Color"},
+							{"lookat",  "LookAt",  "ESP_LookAt_Color"},
 						}
 						for _, s in ipairs(status_map) do
 							local obj = objects[s[1]]
 							if obj then
-								local c = flags[s[3]]
+								local c = flags[cflag(s[3])]
 								if c and c.Color then obj.TextColor3 = c.Color end
 							end
 						end
@@ -3717,11 +3738,11 @@ return LPH_NO_VIRTUALIZE(function()
 
 					if objects["ammo_bg"] then
 						local ammo_on
-						if cfg._show then ammo_on = cfg._show.ammo == true else ammo_on = flags["Ammobar"] == true end
+						if cfg._show then ammo_on = cfg._show.ammo == true else ammo_on = flags[cflag("Ammobar")] == true end
 						objects["ammo_bg"].Parent = ammo_on and objects["holder"] or library.cache
-						local bg = flags["Ammo_BG_Color"]
+						local bg = flags[cflag("Ammo_BG_Color")]
 						if bg and bg.Color then objects["ammo_bg"].BackgroundColor3 = bg.Color end
-						local c1, c2 = flags["Ammo_Color_Top"], flags["Ammo_Color_Bottom"]
+						local c1, c2 = flags[cflag("Ammo_Color_Top")], flags[cflag("Ammo_Color_Bottom")]
 						if objects["ammo_grad"] and c1 and c2 and c1.Color and c2.Color then
 							objects["ammo_grad"].Color = ColorSequence.new(c1.Color, c2.Color)
 						end
@@ -3778,6 +3799,7 @@ return LPH_NO_VIRTUALIZE(function()
 						{key = "bleeding",  label = "Bleeding"},
 						{key = "stims",     label = "Stims"},
 						{key = "looting",   label = "Looting"},
+						{key = "lookat",    label = "Look At"},
 						{key = "stats",     label = "Stats"},
 							{key = "ammo_counter", label = "Ammo Count"},
 						{key = "box",       label = "Box",       global = true},
@@ -3972,11 +3994,17 @@ return LPH_NO_VIRTUALIZE(function()
 					end
 
 					local layout_ctx = "player"
+					cfg._ctx = "player"
 					local function lflag() return layout_ctx == "ai" and "esp_layout_ai" or "esp_layout" end
 
-					local NO_AI = { kd = true, stims = true }
+					local NO_AI  = { kd = true, stims = true, combat = true, bleeding = true,
+						exiting = true, looting = true }
+					local ONLY_AI = { lookat = true }
 					local function ctx_allows(key)
-						return not (NO_AI[key] and layout_ctx == "ai")
+						local ai = layout_ctx == "ai"
+						if NO_AI[key] then return not ai end
+						if ONLY_AI[key] then return ai end
+						return true
 					end
 
 					local function relayout(side)
@@ -4024,7 +4052,7 @@ return LPH_NO_VIRTUALIZE(function()
 					}
 					local STATUS_MAP = { vis = "Visible", manip = "Manip", reload = "Reload",
 						exiting = "Exiting", combat = "Combat", bleeding = "Bleeding", looting = "Looting",
-						stims = "Stims" }
+						stims = "Stims", lookat = "LookAt" }
 					local function sync_status(key, on)
 						local name = STATUS_MAP[key]
 						if not name then return end
@@ -4645,6 +4673,7 @@ return LPH_NO_VIRTUALIZE(function()
 						end
 						if not is_world(layout_ctx) then save_layout() end
 						layout_ctx = ctx
+						if not is_world(ctx) then cfg._ctx = ctx end
 						show_footer(ctx)
 						if is_world(ctx) then
 							show_char_preview(false)
@@ -4666,7 +4695,7 @@ return LPH_NO_VIRTUALIZE(function()
 						end
 					end
 
-					make_tab("player", "MAIN", 1).MouseButton1Click:Connect(function() set_context("player") end)
+					make_tab("player", "PLAYER", 1).MouseButton1Click:Connect(function() set_context("player") end)
 					make_tab("ai",     "AI",   2).MouseButton1Click:Connect(function() set_context("ai") end)
 					do
 						local ord = 3
