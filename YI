@@ -3501,6 +3501,7 @@ return LPH_NO_VIRTUALIZE(function()
 							{"reload",   "RELOAD",    rgb(255, 60, 60)},
 							{"exiting",  "EXITING",   rgb(0, 235, 90)},
 							{"combat",   "[COMBAT]",  rgb(255, 60, 60)},
+							{"bleeding", "BLEEDING",  rgb(200, 30, 60)},
 							{"looting",  "LOOTING",   rgb(255, 220, 50)},
 							{"stats",    "[ STATS ]", rgb(200, 200, 200)},
 						}) do
@@ -3700,6 +3701,7 @@ return LPH_NO_VIRTUALIZE(function()
 							{"reload",  "Reload",  "ESP_Reload_Color"},
 							{"exiting", "Exiting", "ESP_Exit_Color"},
 							{"combat",  "Combat",  "ESP_Combat_Color"},
+							{"bleeding", "Bleeding", "ESP_Bleed_Color"},
 							{"looting", "Looting", "ESP_Loot_Color"},
 						}
 						for _, s in ipairs(status_map) do
@@ -3771,6 +3773,7 @@ return LPH_NO_VIRTUALIZE(function()
 						{key = "reload",    label = "Reload"},
 						{key = "exiting",   label = "Exiting"},
 						{key = "combat",    label = "Combat"},
+						{key = "bleeding",  label = "Bleeding"},
 						{key = "looting",   label = "Looting"},
 						{key = "stats",     label = "Stats"},
 							{key = "ammo_counter", label = "Ammo Count"},
@@ -4010,7 +4013,7 @@ return LPH_NO_VIRTUALIZE(function()
 						hp_number = "HP_Text", kd = "ESP_KD", edition = "ESP_Edition", ammo_counter = "Ammo_Counter",
 					}
 					local STATUS_MAP = { vis = "Visible", manip = "Manip", reload = "Reload",
-						exiting = "Exiting", combat = "Combat", looting = "Looting" }
+						exiting = "Exiting", combat = "Combat", bleeding = "Bleeding", looting = "Looting" }
 					local function sync_status(key, on)
 						local name = STATUS_MAP[key]
 						if not name then return end
