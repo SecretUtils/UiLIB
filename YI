@@ -2962,14 +2962,86 @@ return LPH_NO_VIRTUALIZE(function()
 						end
 					end
 
+					local STRIP3D = {
+						Script = true, LocalScript = true, ModuleScript = true,
+						Sound = true, ParticleEmitter = true, Trail = true, Beam = true,
+						PointLight = true, SpotLight = true, SurfaceLight = true,
+						Smoke = true, Fire = true, Sparkles = true,
+						ClickDetector = true, ProximityPrompt = true,
+						BillboardGui = true, SurfaceGui = true,
+					}
+					cfg._world_cache = {}
+
+					local function build_world_model(def)
+						local src = def.preview_model
+						if type(src) == "function" then
+							local ok, res = pcall(src)
+							src = ok and res or nil
+						end
+						if typeof(src) ~= "Instance" then return nil end
+						local out
+						local ok = pcall(function()
+							local clone = src:Clone()
+							for _, d in ipairs(clone:GetDescendants()) do
+								if STRIP3D[d.ClassName] then
+									d:Destroy()
+								elseif d:IsA("BasePart") then
+									d.Anchored = true
+									d.CanCollide = false; d.CanQuery = false; d.CanTouch = false
+									d.CastShadow = false
+								end
+							end
+							local centre, size
+							if clone:IsA("Model") then
+								local bb; bb, size = clone:GetBoundingBox(); centre = bb.Position
+								clone.WorldPivot = cfr(centre)
+							elseif clone:IsA("BasePart") then
+								centre, size = clone.Position, clone.Size
+							else
+								error("not a model")
+							end
+							if size.Magnitude < 0.1 then size = vec3(2, 2, 2) end
+							local dist = (size.Magnitude * 0.5) / tan(rad(items.camera.FieldOfView * 0.5)) * 1.15
+							local base = cfr(0, 0, -dist)
+							clone:PivotTo(base)
+							clone.Parent = library.cache
+							out = {model = clone, base = base}
+						end)
+						return ok and out or nil
+					end
+
+					function cfg.show_world_model(def)
+						local cur = cfg._world_model
+						if cur then pcall(function() cur.Parent = library.cache end) end
+						cfg._world_model, cfg._world_base = nil, nil
+						if not (def and def.preview_model) then return end
+						local entry = cfg._world_cache[def.ctx]
+						if entry == nil then
+							entry = build_world_model(def)
+							if entry then cfg._world_cache[def.ctx] = entry end
+						end
+						if not (entry and entry.model) then return end
+						pcall(function() entry.model.Parent = items.viewportframe end)
+						cfg._world_model, cfg._world_base = entry.model, entry.base
+					end
+
 					library:connection(run.RenderStepped, function(dt)
-						if not (character and character.PrimaryPart) then return end
 						if cfg._builder_on == false then return end
 						if not dragging then
 							local ease = math.clamp((dt or 1/60) * 8, 0, 1)
 							cfg.rotation = cfg.rotation + (cfg.target_rotation - cfg.rotation) * ease
 							cfg.pitch = cfg.pitch + (cfg.target_pitch - cfg.pitch) * ease
 						end
+						local wm = cfg._world_model
+						if wm then
+							pcall(function()
+								wm:PivotTo(cfg._world_base
+									* angle(math.rad(cfg.pitch), 0, 0)
+									* angle(0, math.rad(cfg.rotation - FRONT), 0))
+							end)
+							return
+						end
+						if not (character and character.PrimaryPart) then return end
 						character:SetPrimaryPartCFrame(cfr(Vector3.new(0, 0.2, -7.5))
 							* angle(math.rad(cfg.pitch), 0, 0)
 							* angle(0, math.rad(cfg.rotation), 0))
@@ -4472,9 +4544,11 @@ return LPH_NO_VIRTUALIZE(function()
 						if is_world(ctx) then
 							show_char_preview(false)
 							show_world_ctx(ctx)
+							pcall(cfg.show_world_model, WORLD[ctx])
 						else
 							show_world_ctx(nil)
 							show_char_preview(true)
+							pcall(cfg.show_world_model, nil)
 							local ok, err = pcall(apply_from_string, flags[lflag()])
 							if not ok then
 								warn("[ESP tab " .. tostring(ctx) .. "] " .. tostring(err))
