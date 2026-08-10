@@ -3502,7 +3502,7 @@ return LPH_NO_VIRTUALIZE(function()
 							{"exiting",  "EXITING",   rgb(0, 235, 90)},
 							{"combat",   "[COMBAT]",  rgb(255, 60, 60)},
 							{"bleeding", "BLEEDING",  rgb(200, 30, 60)},
-							{"stims",    "STIM G 4m53s", rgb(255, 255, 255)},
+							{"stims",    "[G 4m53s]", rgb(80, 220, 120)},
 							{"looting",  "LOOTING",   rgb(255, 220, 50)},
 							{"stats",    "[ STATS ]", rgb(200, 200, 200)},
 						}) do
@@ -3974,6 +3974,11 @@ return LPH_NO_VIRTUALIZE(function()
 					local layout_ctx = "player"
 					local function lflag() return layout_ctx == "ai" and "esp_layout_ai" or "esp_layout" end
 
+					local NO_AI = { kd = true, stims = true }
+					local function ctx_allows(key)
+						return not (NO_AI[key] and layout_ctx == "ai")
+					end
+
 					local function relayout(side)
 						local list = {}
 						for k, s in pairs(placed) do
@@ -3998,7 +4003,9 @@ return LPH_NO_VIRTUALIZE(function()
 						for _, c in ipairs(CHIPS) do
 							local chip = palette_chips[c.key]
 							if chip then
-								if GLOBAL_KEYS[c.key] or BAR_KEYS[c.key] then
+								if not ctx_allows(c.key) then
+									chip.Visible = false
+								elseif GLOBAL_KEYS[c.key] or BAR_KEYS[c.key] then
 									chip.Visible = true
 									chip_active[chip] = placed[c.key] ~= nil
 									chip.BackgroundTransparency = chip_active[chip] and 0.35 or 1
@@ -4430,6 +4437,9 @@ return LPH_NO_VIRTUALIZE(function()
 						local any = false
 						for entry in tostring(str or ""):gmatch("[^,]+") do
 							local k, s, ord = entry:match("^([%w_]+):(%w+):([%d%.]+)$")
+							if k and not ctx_allows(k) then
+								k = nil
+							end
 							if k and s and GLOBAL_KEYS[k] then
 								placed[k] = "on"; cfg._show[k] = true; any = true
 							elseif k and s and BAR_KEYS[k] then
@@ -4441,7 +4451,7 @@ return LPH_NO_VIRTUALIZE(function()
 						if not any and str == nil then
 							for _, c in ipairs(CHIPS) do
 								local side = DEFAULT_SIDE[c.key]
-								if side and objects[c.key] then objects[c.key].Parent = containers[side]; placed[c.key] = side end
+								if side and objects[c.key] and ctx_allows(c.key) then objects[c.key].Parent = containers[side]; placed[c.key] = side end
 							end
 						end
 						for _, s in ipairs(SIDES) do relayout(s) end
