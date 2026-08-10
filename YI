@@ -3005,15 +3005,99 @@ return LPH_NO_VIRTUALIZE(function()
 							local base = cfr(0, 0, -dist)
 							clone:PivotTo(base)
 							clone.Parent = library.cache
-							out = {model = clone, base = base}
+							out = {model = clone, base = base,
+								top = base.Position + vec3(0, size.Y * 0.5 + 0.3, 0)}
 						end)
 						return ok and out or nil
+					end
+
+					local function world_chip_on(def, key)
+						if not (def and def.chips) then return false end
+						for _, c in ipairs(def.chips) do
+							if c.key == key then return flags[c.flag] == true end
+						end
+						return false
+					end
+
+					local function world_tag_text(def)
+						if not (def and def.preview_tags) then return nil end
+						local parts = {}
+						for _, t in ipairs(def.preview_tags) do
+							if world_chip_on(def, t.key) then
+								local v = t.color and flags[t.color]
+								local col = (v and v.Color) or themes.preset.text
+								local a = (v and tonumber(v.Transparency)) or 1
+								if a > 0.02 then
+									local txt = tostring(t.text):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")
+									local r, g, b = floor(col.R * 255 + 0.5), floor(col.G * 255 + 0.5), floor(col.B * 255 + 0.5)
+									if a >= 0.99 then
+										parts[#parts + 1] = string.format('<font color="rgb(%d,%d,%d)">%s</font>', r, g, b, txt)
+									else
+										parts[#parts + 1] = string.format('<font color="rgb(%d,%d,%d)" transparency="%.2f">%s</font>',
+											r, g, b, 1 - a, txt)
+									end
+								end
+							end
+						end
+						if #parts == 0 then return nil end
+						return concat(parts, " ")
+					end
+
+					local function ensure_world_tags()
+						if cfg._world_label then return end
+						cfg._world_icon = library:create("ImageLabel", {
+							Parent = items.viewportframe; Name = "\0"; Visible = false;
+							BackgroundTransparency = 1; BorderSizePixel = 0;
+							AnchorPoint = vec2(0.5, 1); Size = dim2(0, 24, 0, 24); ZIndex = 6;
+						})
+						cfg._world_label = library:create("TextLabel", {
+							Parent = items.viewportframe; Name = "\0"; Visible = false;
+							RichText = true; FontFace = library.font; TextSize = 12;
+							TextColor3 = themes.preset.text; BackgroundTransparency = 1;
+							BorderSizePixel = 0; AnchorPoint = vec2(0.5, 1);
+							Size = dim2(0, 240, 0, 0); AutomaticSize = Enum.AutomaticSize.Y;
+							TextXAlignment = Enum.TextXAlignment.Center; ZIndex = 6;
+						})
+					end
+
+					local function hide_world_tags()
+						if cfg._world_label then cfg._world_label.Visible = false end
+						if cfg._world_icon then cfg._world_icon.Visible = false end
+					end
+
+					local function update_world_tags()
+						local lbl, icon = cfg._world_label, cfg._world_icon
+						if not lbl then return end
+						local def, ent = cfg._world_def, cfg._world_entry
+						if not (def and ent) then hide_world_tags(); return end
+						local sp = vp_project(ent.top)
+						if not sp then hide_world_tags(); return end
+						local txt = world_tag_text(def)
+						if txt then
+							if lbl.Text ~= txt then lbl.Text = txt end
+							lbl.Position = dim2(0, sp.X, 0, sp.Y)
+							lbl.TextColor3 = themes.preset.text
+							lbl.Visible = true
+						else
+							lbl.Visible = false
+						end
+						local want_icon = def.preview_icon and world_chip_on(def, "icon")
+						local img = want_icon and library:image(def.preview_icon, nil) or nil
+						if img then
+							icon.Image = img
+							icon.Position = dim2(0, sp.X, 0, sp.Y - (txt and lbl.AbsoluteSize.Y or 0) - 2)
+							icon.Visible = true
+						else
+							icon.Visible = false
+						end
 					end
 
 					function cfg.show_world_model(def)
 						local cur = cfg._world_model
 						if cur then pcall(function() cur.Parent = library.cache end) end
 						cfg._world_model, cfg._world_base = nil, nil
+						cfg._world_def, cfg._world_entry = nil, nil
+						hide_world_tags()
 						if not (def and def.preview_model) then return end
 						local entry = cfg._world_cache[def.ctx]
 						if entry == nil then
@@ -3023,6 +3107,8 @@ return LPH_NO_VIRTUALIZE(function()
 						if not (entry and entry.model) then return end
 						pcall(function() entry.model.Parent = items.viewportframe end)
 						cfg._world_model, cfg._world_base = entry.model, entry.base
+						cfg._world_def, cfg._world_entry = def, entry
+						ensure_world_tags()
 					end
 
 					library:connection(run.RenderStepped, function(dt)
@@ -3039,6 +3125,7 @@ return LPH_NO_VIRTUALIZE(function()
 									* angle(math.rad(cfg.pitch), 0, 0)
 									* angle(0, math.rad(cfg.rotation - FRONT), 0))
 							end)
+							update_world_tags()
 							return
 						end
 						if not (character and character.PrimaryPart) then return end
