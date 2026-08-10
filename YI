@@ -3846,14 +3846,14 @@ return LPH_NO_VIRTUALIZE(function()
 						library:create("UIListLayout", {
 							Parent = c; FillDirection = Enum.FillDirection.Vertical;
 							HorizontalAlignment = halign; VerticalAlignment = valign;
-							SortOrder = Enum.SortOrder.LayoutOrder; Padding = dim(0, 1);
+							SortOrder = Enum.SortOrder.LayoutOrder; Padding = dim(0, 2);
 						})
 						return c
 					end
 					containers.top    = make_side(vec2(0.5, 1), dim2(0.5, 0, 0, -3), Enum.HorizontalAlignment.Center, Enum.VerticalAlignment.Bottom)
 					containers.bottom = make_side(vec2(0.5, 0), dim2(0.5, 0, 1, 3),  Enum.HorizontalAlignment.Center, Enum.VerticalAlignment.Top)
-					containers.left   = make_side(vec2(1, 0), dim2(0, -5, 0, 0), Enum.HorizontalAlignment.Right,  Enum.VerticalAlignment.Top)
-					containers.right  = make_side(vec2(0, 0), dim2(1, 5, 0, 0),  Enum.HorizontalAlignment.Left,   Enum.VerticalAlignment.Top)
+					containers.left   = make_side(vec2(1, 0), dim2(0, -3, 0, -1), Enum.HorizontalAlignment.Right,  Enum.VerticalAlignment.Top)
+					containers.right  = make_side(vec2(0, 0), dim2(1, 3, 0, -1),  Enum.HorizontalAlignment.Left,   Enum.VerticalAlignment.Top)
 
 					local function normalize(o)
 						o.AnchorPoint = vec2(0, 0)
@@ -3889,19 +3889,19 @@ return LPH_NO_VIRTUALIZE(function()
 							if outer then
 								cfg._bar_horiz[key] = horiz
 								local wf = (key == "healthbar") and "hp_bar_width" or "ammo_bar_width"
-								local T = math.clamp(tonumber(flags[wf]) or 3, 1, 8) + 1
+								local T = math.clamp(tonumber(flags[cflag(wf)]) or 3, 1, 8)
 								local frac = 1 / n
 								local off  = (i - 1) * frac
 								if horiz then
 									local ay = (side == "top") and 1 or 0
-									local oy = (side == "top") and -5 or 5
+									local oy = (side == "top") and -3 or 3
 									local py = (side == "top") and 0 or 1
 									outer.AnchorPoint = vec2(0, ay)
 									outer.Position    = dim2(off, 1, py, oy)
 									outer.Size        = dim2(frac, -2, 0, T)
 								else
 									local ax = (side == "left") and 1 or 0
-									local ox = (side == "left") and -5 or 5
+									local ox = (side == "left") and -3 or 3
 									local px = (side == "left") and 0 or 1
 									outer.AnchorPoint = vec2(ax, 0)
 									outer.Position    = dim2(px, ox, off, 1)
@@ -3918,19 +3918,34 @@ return LPH_NO_VIRTUALIZE(function()
 					placed = {}
 					local order  = {}
 
-					local SIDE_BASE = {
-						top    = dim2(0.5, 0, 0, -3), bottom = dim2(0.5, 0, 1, 3),
-						left   = dim2(0, -5, 0, 0),   right  = dim2(1, 5, 0, 0),
-					}
-					local SIDE_PUSH = {
-						top    = dim2(0.5, 0, 0, -11), bottom = dim2(0.5, 0, 1, 11),
-						left   = dim2(0, -11, 0, 0),   right  = dim2(1, 11, 0, 0),
-					}
+					local function bar_depth(s)
+						local d = 0
+						if placed.healthbar == s then
+							d = math.max(d, math.clamp(tonumber(flags[cflag("hp_bar_width")]) or 3, 1, 8))
+						end
+						if placed.ammo == s then
+							d = math.max(d, math.clamp(tonumber(flags[cflag("ammo_bar_width")]) or 3, 1, 8))
+						end
+						return (d > 0) and (d + 6) or 0
+					end
 					local function refresh_side_offsets()
+						local ts = math.clamp(math.floor(tonumber(flags[cflag("esp_text_size")]) or 13), 8, 24)
+						for _, c in ipairs(CHIPS) do
+							local o = objects[c.key]
+							if o and o:IsA("TextLabel") and o.TextSize ~= ts then o.TextSize = ts end
+						end
 						for _, s in ipairs({"top", "bottom", "left", "right"}) do
 							if containers[s] then
-								local barHere = (placed.healthbar == s) or (placed.ammo == s)
-								containers[s].Position = barHere and SIDE_PUSH[s] or SIDE_BASE[s]
+								local off = 3 + bar_depth(s)
+								if s == "top" then
+									containers[s].Position = dim2(0.5, 0, 0, -off)
+								elseif s == "bottom" then
+									containers[s].Position = dim2(0.5, 0, 1, off)
+								elseif s == "left" then
+									containers[s].Position = dim2(0, -off, 0, -1)
+								else
+									containers[s].Position = dim2(1, off, 0, -1)
+								end
 							end
 						end
 					end
