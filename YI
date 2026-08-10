@@ -2798,7 +2798,10 @@ return LPH_NO_VIRTUALIZE(function()
 					local mat_saved = {}
 
 					local function cflag(n)
-						if cfg._ctx == "ai" then return "AI_" .. n end
+						if cfg._ctx == "ai" then
+							local a = "AI_" .. n
+							if flags[a] ~= nil then return a end
+						end
 						return n
 					end
 					local function cmaster()
@@ -3622,8 +3625,8 @@ return LPH_NO_VIRTUALIZE(function()
 					local humanoid = character.Humanoid
 
 					local multiplier = humanoid.MaxHealth * math.abs(math.sin(tick() * 2)) / humanoid.MaxHealth
-					local lowf  = flags[cflag("Health_Low")]  or flags["Health_Low"]
-					local highf = flags[cflag("Health_High")] or flags["Health_High"]
+					local lowf  = flags[cflag("Health_Low")]
+					local highf = flags[cflag("Health_High")]
 					local color = rgb(255, 255, 255)
 					if lowf and lowf.Color and highf and highf.Color then
 						color = lowf.Color:Lerp(highf.Color, multiplier)
@@ -3669,7 +3672,8 @@ return LPH_NO_VIRTUALIZE(function()
 						end
 					end
 
-					local is_corner = flags[cflag("Box_Type")] == "Corner"
+					local bt = flags[cflag("Box_Type")]
+					local is_corner = (bt == nil) or (bt == "Corner")
 
 					local box_on
 					if cfg._show then box_on = cfg._show.box == true else box_on = flags[cflag("Boxes")] == true end
@@ -3691,7 +3695,7 @@ return LPH_NO_VIRTUALIZE(function()
 					end
 
 					do
-						local bc = flags[cflag("Box_Color")] or flags["Box_Color"]
+						local bc = flags[cflag("Box_Color")]
 						if bc and bc.Color then
 							objects[ "box_color" ].Color = bc.Color
 							for _, corner in objects[ "corners" ]:GetChildren() do
