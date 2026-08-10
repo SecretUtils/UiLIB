@@ -2942,7 +2942,7 @@ return LPH_NO_VIRTUALIZE(function()
 							local box_on = (B and B.box == true) or (not B and flags[cflag("Boxes")] == true)
 							if not o.box_fill then
 								local f = library:create("Frame", {
-									Parent = o.holder; Name = "\0"; ZIndex = 0; Visible = false;
+									Parent = o.holder; Name = "\0"; ZIndex = 1; Visible = false;
 									BackgroundColor3 = rgb(255, 255, 255); BorderSizePixel = 0;
 									Size = dim2(1, 0, 1, 0); Position = dim2(0, 0, 0, 0);
 								})
@@ -3679,6 +3679,8 @@ return LPH_NO_VIRTUALIZE(function()
 					if cfg._show then box_on = cfg._show.box == true else box_on = flags[cflag("Boxes")] == true end
 
 					if box_on then
+						objects[ "corners" ].ZIndex = 2
+						objects[ "box_handler" ].ZIndex = 2
 						if is_corner then
 							objects[ "corners" ].Parent = objects["holder"]
 							objects[ "box_handler" ].Parent = library.cache
