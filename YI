@@ -2670,6 +2670,18 @@ return LPH_NO_VIRTUALIZE(function()
 			function library:esp_preview(properties)
 				local cfg = {items = {}, rotation = 0; objects = {};}
 
+				local function cflag(n)
+					if cfg._ctx == "ai" then
+						local a = "AI_" .. n
+						if flags[a] ~= nil then return a end
+					end
+					return n
+				end
+				local function cmaster()
+					if cfg._ctx == "ai" then return flags["ESP_AI"] end
+					return flags["Enabled"]
+				end
+
 				local character = nil
 				if lp.Character then
 					lp.Character.Archivable = true
@@ -2796,18 +2808,6 @@ return LPH_NO_VIRTUALIZE(function()
 						{"LowerTorso","RightUpperLeg"},{"RightUpperLeg","RightLowerLeg"},{"RightLowerLeg","RightFoot"},
 					}
 					local mat_saved = {}
-
-					local function cflag(n)
-						if cfg._ctx == "ai" then
-							local a = "AI_" .. n
-							if flags[a] ~= nil then return a end
-						end
-						return n
-					end
-					local function cmaster()
-						if cfg._ctx == "ai" then return flags["ESP_AI"] end
-						return flags["Enabled"]
-					end
 
 					local function update_preview_overlays()
 						local o = cfg.objects
