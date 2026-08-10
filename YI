@@ -2942,7 +2942,7 @@ return LPH_NO_VIRTUALIZE(function()
 							local box_on = (B and B.box == true) or (not B and flags[cflag("Boxes")] == true)
 							if not o.box_fill then
 								local f = library:create("Frame", {
-									Parent = o.holder; Name = "\0"; ZIndex = 1; Visible = false;
+									Parent = o.holder; Name = "\0"; ZIndex = 0; Visible = false;
 									BackgroundColor3 = rgb(255, 255, 255); BorderSizePixel = 0;
 									Size = dim2(1, 0, 1, 0); Position = dim2(0, 0, 0, 0);
 								})
@@ -3698,8 +3698,10 @@ return LPH_NO_VIRTUALIZE(function()
 						local bc = flags[cflag("Box_Color")]
 						if bc and bc.Color then
 							objects[ "box_color" ].Color = bc.Color
+							objects[ "box_outline" ].Color = bc.Color
 							for _, corner in objects[ "corners" ]:GetChildren() do
-								corner.Frame.BackgroundColor3 = bc.Color
+								local inner = corner:FindFirstChildOfClass("Frame")
+								if inner then inner.BackgroundColor3 = bc.Color end
 							end
 						end
 					end
