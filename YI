@@ -3697,13 +3697,20 @@ return LPH_NO_VIRTUALIZE(function()
 					end
 
 					do
-						local bc = flags[cflag("Box_Color")]
+						local bc  = flags[cflag("Box_Color")]
+						local bc2 = flags[cflag("Box_Color_2")]
+						objects[ "box_color" ].Thickness =
+							math.clamp(tonumber(flags[cflag("box_stroke_thickness")]) or 1, 1, 5)
 						if bc and bc.Color then
 							objects[ "box_color" ].Color = bc.Color
-							objects[ "box_outline" ].Color = bc.Color
+							local top_col = bc.Color
+							local bot_col = (bc2 and bc2.Color) or rgb(0, 0, 0)
 							for _, corner in objects[ "corners" ]:GetChildren() do
 								local inner = corner:FindFirstChildOfClass("Frame")
-								if inner then inner.BackgroundColor3 = bc.Color end
+								if inner then
+									inner.BackgroundColor3 =
+										(corner.Position.Y.Scale >= 1) and bot_col or top_col
+								end
 							end
 						end
 					end
