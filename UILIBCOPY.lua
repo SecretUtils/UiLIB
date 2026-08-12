@@ -3867,6 +3867,7 @@ return LPH_NO_VIRTUALIZE(function()
 					local chip_active   = {}
 
 					local dragging, hover_side, hover_before, hover_palette = nil, nil, nil, false
+					local drag_origin
 					local last_hpw
 
 					local drag_ghost = nil
@@ -4059,32 +4060,184 @@ return LPH_NO_VIRTUALIZE(function()
 							if input.UserInputType == Enum.UserInputType.MouseButton1
 								or input.UserInputType == Enum.UserInputType.Touch then
 								dragging = key; hover_side = nil; hover_before = nil; hover_palette = false
+								drag_origin = vec2(mouse.X, mouse.Y)
 								make_drag_ghost(label)
 							end
 						end)
 					end
 
+					-- DROP ZONES.
+					--
+					-- These used to be Active frames that armed themselves from
+					-- MouseEnter, and that is exactly why dropping a chip was
+					-- fiddly. A zone sits at ZIndex 2 -- UNDER the box (3), the
+					-- containers (3), every placed chip (6) and the model itself --
+					-- so the moment the pointer crossed anything that LOOKS like a
+					-- target, the enter never fired, hover_side stayed nil and the
+					-- drop was silently thrown away. Being Active, they were also
+					-- eating the click-drag that spins the preview.
+					--
+					-- So they are pure VISUALS now: inert, invisible at rest, and
+					-- lit while a chip is in flight. The side is resolved
+					-- geometrically every frame instead (see update_drop_target).
+					local zones = {}
 					local function make_zone(anchor, pos, size, side)
 						local z = library:create("Frame", {
-							Parent = holder; Name = "\0"; BackgroundTransparency = 1; Active = true;
-							AnchorPoint = anchor; Position = pos; Size = size; BorderSizePixel = 0; ZIndex = 2;
+							Parent = holder; Name = "\0"; Active = false;
+							BackgroundColor3 = ACCENT; BackgroundTransparency = 1;
+							AnchorPoint = anchor; Position = pos; Size = size;
+							BorderSizePixel = 0; ZIndex = 2;
 						})
-						library:connection(z.MouseEnter, function() if dragging then hover_side = side; hover_before = nil end end)
-						library:connection(z.MouseLeave, function() if dragging and hover_side == side then hover_side = nil end end)
+						library:apply_theme(z, "accent", "BackgroundColor3")
+						local cap = library:create("TextLabel", {
+							Parent = z; Name = "\0"; FontFace = library.font;
+							Text = side:upper(); TextColor3 = ACCENT; TextTransparency = 1;
+							TextSize = 11; ZIndex = 2; Size = dim2(1, 0, 1, 0);
+							BackgroundTransparency = 1; BorderSizePixel = 0;
+							BackgroundColor3 = rgb(255, 255, 255);
+						})
+						library:apply_theme(cap, "accent", "TextColor3")
+						zones[side] = {frame = z, cap = cap}
 					end
 					make_zone(vec2(0.5, 1), dim2(0.5, 0, 0, 0), dim2(2, 24, 0, 55), "top")
 					make_zone(vec2(0.5, 0), dim2(0.5, 0, 1, 0), dim2(2, 24, 0, 55), "bottom")
 					make_zone(vec2(1, 0.5), dim2(0, 0, 0.5, 0), dim2(0, 55, 2, 24), "left")
 					make_zone(vec2(0, 0.5), dim2(1, 0, 0.5, 0), dim2(0, 55, 2, 24), "right")
 
-					library:connection(tray_wrap.MouseEnter, function() if dragging then hover_palette = true end end)
-					library:connection(tray_wrap.MouseLeave, function() hover_palette = false end)
+					-- everything the drag needs to know, recomputed each frame from
+					-- the pointer. wrapped in its own frame so the four helpers cost
+					-- esp_preview one register rather than five -- this function is
+					-- already long and luau caps a frame at 200.
+					local update_drop_target = (function()
+						local function point_in(o)
+							local p, s = o.AbsolutePosition, o.AbsoluteSize
+							return mouse.X >= p.X and mouse.X <= p.X + s.X
+								and mouse.Y >= p.Y and mouse.Y <= p.Y + s.Y
+						end
+
+						-- outside every zone the drop still has to land SOMEWHERE,
+						-- so the pointer is measured against the box centre and the
+						-- dominant axis wins. normalised by the box's own half
+						-- extents, or a wide box reads as "left" for a pointer
+						-- that's plainly above it.
+						--
+						-- this is only forgiving because the answer is always ON
+						-- SCREEN: whatever it resolves to is the zone that lights
+						-- up, so a loose drop is a visible choice rather than a
+						-- guess that silently lands somewhere else.
+						local function nearest_side()
+							local p, s = holder.AbsolutePosition, holder.AbsoluteSize
+							local nx = (mouse.X - (p.X + s.X * 0.5)) / math.max(s.X * 0.5, 1)
+							local ny = (mouse.Y - (p.Y + s.Y * 0.5)) / math.max(s.Y * 0.5, 1)
+							if math.abs(nx) > math.abs(ny) then
+								return (nx < 0) and "left" or "right"
+							end
+							return (ny < 0) and "top" or "bottom"
+						end
+
+						-- every side stacks vertically (the top container just hugs
+						-- its bottom edge), so the insertion point is the topmost
+						-- chip the pointer is still above. nil = append.
+						local function stack_scan(side, key)
+							local before, before_mid, tail, tail_y
+							for k, s in pairs(placed) do
+								if s == side and k ~= key and not GLOBAL_KEYS[k] and not BAR_KEYS[k] then
+									local o = objects[k]
+									if o and o.Visible then
+										local top = o.AbsolutePosition.Y
+										local mid = top + o.AbsoluteSize.Y * 0.5
+										if mouse.Y < mid and (not before_mid or mid < before_mid) then
+											before, before_mid = k, mid
+										end
+										if not tail_y or top > tail_y then tail, tail_y = o, top end
+									end
+								end
+							end
+							return before, (before and objects[before]) or tail, before ~= nil
+						end
+
+						-- a 2px accent rule where the chip will land, so the ORDER
+						-- within a side is as visible as the side itself
+						local caret = library:create("Frame", {
+							Parent = items.viewportframe; Name = "\0"; Visible = false;
+							BackgroundColor3 = ACCENT; BorderSizePixel = 0; ZIndex = 10;
+						})
+						library:apply_theme(caret, "accent", "BackgroundColor3")
+
+						return function()
+							local key = dragging
+
+							if not key then
+								hover_side, hover_before, hover_palette = nil, nil, false
+							elseif library:hovering(tray_wrap) then
+								hover_palette, hover_side, hover_before = true, nil, nil
+							else
+								hover_palette = false
+								if GLOBAL_KEYS[key] then
+									-- box / chams / skeleton / head dot have no side
+									-- to pick, so arming a zone would be a lie
+									hover_side, hover_before = nil, nil
+								else
+									local side
+									for _, s in ipairs(SIDES) do
+										local z = zones[s]
+										if z and point_in(z.frame) then side = s break end
+									end
+									hover_side = side or nearest_side()
+									hover_before = nil
+									if not BAR_KEYS[key] then
+										hover_before = (stack_scan(hover_side, key))
+									end
+								end
+							end
+
+							local lit = hover_side ~= nil
+							local base = lit and 0.93 or 1
+							for _, s in ipairs(SIDES) do
+								local z = zones[s]
+								if z then
+									local bg  = (hover_side == s) and 0.78 or base
+									local txt = (hover_side == s) and 0.15 or (lit and 0.7 or 1)
+									if z.frame.BackgroundTransparency ~= bg then z.frame.BackgroundTransparency = bg end
+									if z.cap.TextTransparency ~= txt then z.cap.TextTransparency = txt end
+								end
+							end
+
+							if lit and not BAR_KEYS[key] then
+								local _, anchor_o, above = stack_scan(hover_side, key)
+								if anchor_o then
+									local vpp = items.viewportframe.AbsolutePosition
+									local ap, av = anchor_o.AbsolutePosition, anchor_o.AbsoluteSize
+									caret.Position = dim2(0, ap.X - vpp.X,
+										0, (above and (ap.Y - 3) or (ap.Y + av.Y + 1)) - vpp.Y)
+									caret.Size = dim2(0, math.max(av.X, 24), 0, 2)
+									caret.Visible = true
+								else
+									caret.Visible = false   -- empty side: the zone says it all
+								end
+							elseif caret.Visible then
+								caret.Visible = false
+							end
+						end
+					end)()
 
 					library:connection(uis.InputEnded, function(input)
 						if not dragging then return end
 						if input.UserInputType ~= Enum.UserInputType.MouseButton1
 							and input.UserInputType ~= Enum.UserInputType.Touch then return end
 						local key = dragging; dragging = nil
+
+						-- A CLICK IS NOT A DRAG. The resolver always has a side
+						-- armed while something is in flight, so without this,
+						-- tapping a chip that's already placed re-drops it and can
+						-- nudge its order under the pointer.
+						if drag_origin
+							and math.abs(mouse.X - drag_origin.X) + math.abs(mouse.Y - drag_origin.Y) < 5 then
+							hover_side = nil; hover_before = nil; hover_palette = false
+							kill_drag_ghost()
+							return
+						end
+
 						if BAR_KEYS[key] then
 							if library:hovering(tray_wrap) then
 								if placed[key] then unplace(key) end
@@ -4109,11 +4262,10 @@ return LPH_NO_VIRTUALIZE(function()
 								normalize(o)
 								add_hover(o)
 								bind_drag(o, c.key, c.label)
-								library:connection(o.MouseEnter, function()
-									if dragging and dragging ~= c.key and placed[c.key] then
-										hover_side = placed[c.key]; hover_before = c.key
-									end
-								end)
+								-- no MouseEnter ordering hook here any more: the
+								-- insertion point is geometric now, so it also
+								-- resolves in the GAPS between chips instead of
+								-- only when the pointer is dead on top of one
 							end
 
 							local chip = library:create("TextLabel", {
@@ -4195,6 +4347,7 @@ return LPH_NO_VIRTUALIZE(function()
 								kill_drag_ghost()
 							end
 						end
+						update_drop_target()
 						cfg._builder_on = builder_visible()
 						if not cfg._builder_on then
 							if sel_overlay.Visible then sel_overlay.Visible = false end
@@ -8790,8 +8943,11 @@ return LPH_NO_VIRTUALIZE(function()
 					rarity   = options.rarity,
 					include  = options.include,
 					-- icon(name) -> asset id. only consulted for a cell with no
-					-- geometry, so the fallback runs model -> image -> name
+					-- geometry, so the fallback runs model -> image -> name.
+					-- icon_only skips the geometry step entirely: EVERY cell goes
+					-- image -> name, even one that has a model sitting right there.
 					icon     = options.icon,
+					icon_only = options.icon_only,
 					callback = options.callback or function() end,
 					cells    = {},
 					selected = {},
@@ -9147,7 +9303,12 @@ return LPH_NO_VIRTUALIZE(function()
 					-- degrades in two steps rather than sitting there as an empty
 					-- box: the item's ICON if the consumer can resolve one, and its
 					-- NAME as text if even that fails.
-					local renderable = child:IsA("Model") or child:IsA("BasePart")
+					--
+					-- under icon_only nothing is renderable, so a grid whose items
+					-- all have art is a wall of flat icons with no viewport, no
+					-- WorldModel and no per-cell camera anywhere in it.
+					local renderable = not cfg.icon_only
+						and (child:IsA("Model") or child:IsA("BasePart"))
 					local iconId
 					if not renderable and cfg.icon then
 						local oki, id = pcall(cfg.icon, child.Name)
