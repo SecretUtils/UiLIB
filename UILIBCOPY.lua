@@ -111,6 +111,19 @@ return LPH_NO_VIRTUALIZE(function()
 		local flags = library.flags
 		local config_flags = library.config_flags
 
+		-- CAPABILITY MARKER, and it exists for one specific failure.
+		--
+		-- The library publishes itself to getgenv().DELTA_UILIB, and consumers
+		-- read that global instead of re-fetching. That cache lives for the whole
+		-- ROBLOX SESSION, not the script's -- so after this file is updated, a
+		-- client that already loaded the old one keeps using it no matter how many
+		-- times the script is re-executed, and the new features just aren't there.
+		-- Rejoining fixes it, which is a miserable thing to have to work out.
+		--
+		-- A consumer can check this instead and re-fetch when it's missing. Bump
+		-- the name whenever a change would leave an old cached copy looking broken.
+		library.esp_contexts = true
+
 		local themes = {
 			preset = {
 				["outline"] = hex("#0A0A0A"),
@@ -3936,10 +3949,22 @@ return LPH_NO_VIRTUALIZE(function()
 						weapon_icon = "Weapon_Icon", clan = "Clan_Tag",
 					}
 					local STATUS_MAP = { vis = "Visible" }
+
+					-- the flag a chip writes is PER CONTEXT, and this is the one place
+					-- it's easy to forget: placing Box on the NODE tab has to set
+					-- NODE_Boxes, not Boxes. Missing it means the chip appears to do
+					-- nothing on every context except player, because it's quietly
+					-- toggling the player's flag instead.
+					local function ctx_flag(fl)
+						local c = CTX[layout_ctx]
+						if c and c.prefix ~= "" then return c.prefix .. fl end
+						return fl
+					end
+
 					local function sync_status(key, on)
 						local name = STATUS_MAP[key]
 						if not name then return end
-						local fl = (layout_ctx == "ai") and "AI_ESP_Status_Sel" or "ESP_Status_Sel"
+						local fl = ctx_flag("ESP_Status_Sel")
 						local arr = flags[fl]; if type(arr) ~= "table" then arr = {} end
 						local out = {}
 						for _, v in ipairs(arr) do if v ~= name then out[#out + 1] = v end end
@@ -3950,7 +3975,7 @@ return LPH_NO_VIRTUALIZE(function()
 					local function sync_real_flag(key, on)
 						local fl = REAL_FLAG[key]
 						if fl then
-							if layout_ctx == "ai" then fl = "AI_" .. fl end
+							fl = ctx_flag(fl)
 							flags[fl] = on and true or false
 							if properties.on_apply then pcall(properties.on_apply, key, on, layout_ctx) end
 						else
@@ -8764,6 +8789,9 @@ return LPH_NO_VIRTUALIZE(function()
 					hint     = options.hint,
 					rarity   = options.rarity,
 					include  = options.include,
+					-- icon(name) -> asset id. only consulted for a cell with no
+					-- geometry, so the fallback runs model -> image -> name
+					icon     = options.icon,
 					callback = options.callback or function() end,
 					cells    = {},
 					selected = {},
@@ -8956,6 +8984,9 @@ return LPH_NO_VIRTUALIZE(function()
 				local function build(cell)
 					if cell.built then return end
 					cell.built = true
+					-- a text cell has nothing to clone and nothing to tear down; it
+					-- is marked built so the lazy loop stops reconsidering it
+					if not cell.renderable then return end
 					pcall(function()
 						local clone = cell.model:Clone()
 						for _, d in ipairs(clone:GetDescendants()) do
@@ -8999,7 +9030,7 @@ return LPH_NO_VIRTUALIZE(function()
 				end
 
 				local function teardown(cell)
-					if not cell.built then return end
+					if not cell.built or not cell.renderable then return end
 					cell.built = false
 					if cell.world then pcall(function() cell.world:Destroy() end); cell.world = nil end
 					for _, ch in ipairs(cell.vp:GetChildren()) do
@@ -9014,7 +9045,11 @@ return LPH_NO_VIRTUALIZE(function()
 				}
 				local entries = {}
 				for _, child in ipairs(cfg.source:GetChildren()) do
-					local keep = child:IsA("Model") or child:IsA("BasePart")
+					-- anything is allowed to be a cell now, not just geometry. a
+					-- child with nothing renderable becomes a TEXT cell (see below),
+					-- because plenty of items have no model to show and a blank
+					-- viewport just reads as a broken cell.
+					local keep = true
 					if keep and cfg.include then
 						local oki, want = pcall(cfg.include, child.Name)
 						if oki then keep = want and true or false end
@@ -9107,9 +9142,52 @@ return LPH_NO_VIRTUALIZE(function()
 					})
 					library:create("UICorner", { Parent = pip, CornerRadius = UDim.new(1, 0) })
 
+					-- NOT EVERYTHING HAS A MODEL. Resources, ammo and anything the
+					-- game only ships art for have no geometry anywhere, so the cell
+					-- degrades in two steps rather than sitting there as an empty
+					-- box: the item's ICON if the consumer can resolve one, and its
+					-- NAME as text if even that fails.
+					local renderable = child:IsA("Model") or child:IsA("BasePart")
+					local iconId
+					if not renderable and cfg.icon then
+						local oki, id = pcall(cfg.icon, child.Name)
+						if oki and type(id) == "string" and id ~= "" then iconId = id end
+					end
+
+					if iconId then
+						vp.Visible = false
+						library:create("ImageLabel", {
+							Parent = btn, Name = "", ZIndex = 2,
+							Image = iconId,
+							ScaleType = Enum.ScaleType.Fit,
+							BackgroundTransparency = 1,
+							Position = dim2(0, 4, 0, 4),
+							Size = dim2(1, -8, 1, -8),
+							BorderSizePixel = 0,
+							BackgroundColor3 = rgb(255, 255, 255)
+						})
+					elseif not renderable then
+						vp.Visible = false
+						local nameLabel = library:create("TextLabel", {
+							Parent = btn, Name = "", ZIndex = 2,
+							FontFace = library.font,
+							Text = pretty(child.Name),
+							TextColor3 = themes.preset.text,
+							TextSize = 11,
+							TextWrapped = true,
+							TextTransparency = 0.15,
+							BackgroundTransparency = 1,
+							Position = dim2(0, 3, 0, 3),
+							Size = dim2(1, -6, 1, -6),
+							BorderSizePixel = 0,
+							BackgroundColor3 = rgb(255, 255, 255)
+						}) library:apply_theme(nameLabel, "text", "TextColor3")
+					end
+
 					local cell = { name = child.Name, model = child, btn = btn,
 						vp = vp, pip = pip, wash = wash, stroke = stroke,
-						rarity = entry.rarity, tier = entry.tier, built = false }
+						rarity = entry.rarity, tier = entry.tier,
+						renderable = renderable, built = false }
 					cfg.cells[#cfg.cells + 1] = cell
 
 					btn.MouseButton1Click:Connect(function()
