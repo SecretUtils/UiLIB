@@ -2683,16 +2683,59 @@ return LPH_NO_VIRTUALIZE(function()
 				properties = properties or {}
 				local cfg = {items = {}, rotation = 0; objects = {};}
 
+				-- CONTEXTS -- the tabs across the top of the builder.
+				--
+				-- player and ai are the built-ins. everything that used to be
+				-- hardcoded about them is a field here instead, so a consuming
+				-- script can add a tab of its own for something that isn't a
+				-- player at all -- a resource node, a container, a drop.
+				--
+				--   id     the string handed to context_filter / panels / footers
+				--   label  the tab caption
+				--   prefix flag prefix, so "Names" becomes "NODE_Names". "" for
+				--          player, which owns the unprefixed names.
+				--   master flag holding that context's master enable
+				--   layout flag holding the saved chip placement
+				--   model  OPTIONAL function returning an Instance to preview
+				--          instead of the character. a context that supplies one
+				--          isn't about a player, so the character-shaped overlays
+				--          (skeleton, head dot) find no parts and stay hidden on
+				--          their own rather than needing to be special-cased.
+				--
+				-- extra_contexts APPENDS, which is the safe call for existing
+				-- consumers: passing `contexts` replaces the built-ins outright.
+				local CONTEXTS = {}
+				for _, c in ipairs(properties.contexts or {
+					{id = "player", label = "PLAYER", prefix = "",    master = "Enabled", layout = "esp_layout"},
+					{id = "ai",     label = "AI",     prefix = "AI_", master = "ESP_AI",  layout = "esp_layout_ai"},
+				}) do CONTEXTS[#CONTEXTS + 1] = c end
+				for _, c in ipairs(properties.extra_contexts or {}) do
+					CONTEXTS[#CONTEXTS + 1] = c
+				end
+
+				local CTX = {}
+				for _, c in ipairs(CONTEXTS) do
+					c.label  = c.label  or c.id:upper()
+					c.prefix = c.prefix or (c.id:upper() .. "_")
+					c.layout = c.layout or ("esp_layout_" .. c.id)
+					c.master = c.master or (c.prefix .. "Enabled")
+					CTX[c.id] = c
+				end
+
 				local function cflag(n)
-					if cfg._ctx == "ai" then
-						local a = "AI_" .. n
+					local c = CTX[cfg._ctx]
+					if c and c.prefix ~= "" then
+						local a = c.prefix .. n
+						-- falls back to the unprefixed flag when the context
+						-- hasn't declared its own, which is what lets a context
+						-- share a setting rather than duplicate every picker
 						if flags[a] ~= nil then return a end
 					end
 					return n
 				end
 				local function cmaster()
-					if cfg._ctx == "ai" then return flags["ESP_AI"] end
-					return flags["Enabled"]
+					local c = CTX[cfg._ctx]
+					return c and flags[c.master]
 				end
 
 				-- colour flags are declared by whatever script is consuming the library, so
@@ -2709,6 +2752,14 @@ return LPH_NO_VIRTUALIZE(function()
 					character = lp.Character:Clone()
 					pcall(function() character.Animate:Destroy() end)
 				end
+
+				-- the SUBJECT is whatever the preview spins and measures its box
+				-- around. it's the character clone for player/ai, and a context's
+				-- own model for anything else. everything downstream reads this
+				-- rather than `character` so a non-player tab needs no branches.
+				local subject   = character
+				local ctx_model             -- the current context's cloned model
+				local ctx_model_id          -- which context that clone belongs to
 
 				local items = cfg.items; do
 					items.viewportframe = library:create( "ViewportFrame" , {
@@ -2790,8 +2841,18 @@ return LPH_NO_VIRTUALIZE(function()
 						return vec2(sx, sy), depth
 					end
 
+					-- the part the box is measured from. PrimaryPart for a rig,
+					-- and any BasePart for a model that never had one set --
+					-- a map prop generally hasn't.
+					local function anchor_part()
+						local s = subject
+						if not s then return nil end
+						if s:IsA("BasePart") then return s end
+						return s.PrimaryPart or s:FindFirstChildWhichIsA("BasePart")
+					end
+
 					local function update_preview_box()
-						local hrp = character and character.PrimaryPart
+						local hrp = anchor_part()
 						local holder = cfg.objects.holder
 						if not (hrp and holder) then return end
 						local hpos = hrp.Position
@@ -2805,15 +2866,32 @@ return LPH_NO_VIRTUALIZE(function()
 							w = math.max(sf * (flags["Static_Box_X"] or 2.5), 8)
 							cx, cy = sp.X, sp.Y
 						else
-							local up = hrp.CFrame.UpVector
-							local spT = vp_project(hpos + up * 2)
-							local spB = vp_project(hpos - up * 2.8)
+							-- 2 up / 2.8 down is an R15 rig, measured from the root.
+							-- A context model is any shape at all, so it's measured
+							-- from its OWN bounding box instead -- otherwise a squat
+							-- prop gets a tall thin box drawn through the middle.
+							local up, upAmt, dnAmt, aspect = hrp.CFrame.UpVector, 2, 2.8, nil
+							if subject ~= character then
+								local ok, bcf, bsz = pcall(function()
+									if subject:IsA("Model") then return subject:GetBoundingBox() end
+									return subject.CFrame, subject.Size
+								end)
+								if ok and bcf and bsz and bsz.Y > 0 then
+									hpos   = bcf.Position          -- box centre, not the anchor part
+									up     = bcf.UpVector
+									upAmt  = bsz.Y * 0.5
+									dnAmt  = bsz.Y * 0.5
+									aspect = math.max(bsz.X, bsz.Z) / bsz.Y
+								end
+							end
+							local spT = vp_project(hpos + up * upAmt)
+							local spB = vp_project(hpos - up * dnAmt)
 							if not (spT and spB) then return end
 							local raw_h = math.abs(spB.Y - spT.Y)
 							if raw_h <= 0 then return end
 							local pad = flags["Dynamic_Box_Padding"] or 1
 							h  = raw_h * pad
-							w  = (raw_h / 1.5) * pad
+							w  = (aspect and (raw_h * aspect) or (raw_h / 1.5)) * pad
 							cx = (spT.X + spB.X) * 0.5
 							cy = math.min(spT.Y, spB.Y) + raw_h * 0.5
 						end
@@ -2832,7 +2910,11 @@ return LPH_NO_VIRTUALIZE(function()
 
 					local function update_preview_overlays()
 						local o = cfg.objects
-						if not (character and o) then return end
+						-- subject, not character: on a context showing its own model
+						-- the overlays should measure THAT. the character-shaped ones
+						-- below (head dot, skeleton) then find no parts on it and
+						-- hide themselves, which is exactly the wanted behaviour.
+						if not (subject and o) then return end
 						if not cfg._preview_sg then cfg._preview_sg = items.viewportframe:FindFirstAncestorWhichIsA("ScreenGui") end
 						if cfg._preview_sg and not cfg._preview_sg.Enabled then return end
 						local enabled = cmaster()
@@ -2852,7 +2934,7 @@ return LPH_NO_VIRTUALIZE(function()
 						end
 						if o.chams then
 							if not B and enabled and flags[cflag("Chams")] then
-								o.chams.Adornee = character
+								o.chams.Adornee = subject
 								local oc = flags[cflag("Chams_Outline")];     if oc and oc.Color then o.chams.OutlineColor = oc.Color end
 								local fc = flags[cflag("Chams_Fill_Color")];  if fc and fc.Color then o.chams.FillColor    = fc.Color end
 								o.chams.OutlineTransparency = flags[cflag("Chams_Outline_On")] and (1 - (flags[cflag("Chams_Outline_Opacity")] or 100) / 100) or 1
@@ -2868,7 +2950,7 @@ return LPH_NO_VIRTUALIZE(function()
 							if not ok then mat = Enum.Material.Neon end
 							local col = (flags[cflag("esp_mat_color_on")] and flags[cflag("esp_mat_color")] and flags[cflag("esp_mat_color")].Color) or nil
 							local tr  = math.clamp((flags[cflag("esp_mat_transp")] or 0) / 100, 0, 0.99)
-							for _, p in ipairs(character:GetDescendants()) do
+							for _, p in ipairs(subject:GetDescendants()) do
 								if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
 									if mat_saved[p] == nil then mat_saved[p] = {p.Material, p.Color, p.Transparency} end
 									p.Material = mat
@@ -2884,7 +2966,7 @@ return LPH_NO_VIRTUALIZE(function()
 						end
 
 						if o.head_dot then
-							local head = character:FindFirstChild("Head")
+							local head = subject:FindFirstChild("Head")
 							local sp = (enabled and ((B and B.head_dot) or (not B and flags[cflag("HeadDot")])) and head) and vp_project(head.Position) or nil
 							if sp then
 								local sz = (flags[cflag("headdot_size")] or 4) * 1.6
@@ -2915,8 +2997,8 @@ return LPH_NO_VIRTUALIZE(function()
 								local th = flags[cflag("skel_thickness")] or 2
 								for i, bone in ipairs(PREVIEW_BONES) do
 									local line = o.skel_lines[i]
-									local a = character:FindFirstChild(bone[1])
-									local b = character:FindFirstChild(bone[2])
+									local a = subject:FindFirstChild(bone[1])
+									local b = subject:FindFirstChild(bone[2])
 									local pa = a and vp_project(a.Position) or nil
 									local pb = b and vp_project(b.Position) or nil
 									if line and pa and pb then
@@ -2984,10 +3066,27 @@ return LPH_NO_VIRTUALIZE(function()
 							cfg.rotation = cfg.rotation + (cfg.target_rotation - cfg.rotation) * ease
 							cfg.pitch = cfg.pitch + (cfg.target_pitch - cfg.pitch) * ease
 						end
-						if not (character and character.PrimaryPart) then return end
-						character:SetPrimaryPartCFrame(cfr(Vector3.new(0, 0.2, -7.5))
-							* angle(math.rad(cfg.pitch), 0, 0)
-							* angle(0, math.rad(cfg.rotation), 0))
+						if not subject then return end
+						-- PivotTo rather than SetPrimaryPartCFrame: identical for a
+						-- rig (the pivot IS the PrimaryPart) but it also works on a
+						-- model that never had a PrimaryPart assigned.
+						--
+						-- the standing distance is fixed for a character and derived
+						-- for anything else, so a model that's twice a player's size
+						-- doesn't fill the whole viewport or sit lost in the middle.
+						local dist = 7.5
+						if subject ~= character then
+							local ok, sz = pcall(function()
+								if subject:IsA("Model") then local _, s = subject:GetBoundingBox() return s end
+								return subject.Size
+							end)
+							if ok and sz then dist = math.clamp(sz.Magnitude * 1.1, 5, 40) end
+						end
+						pcall(function()
+							subject:PivotTo(cfr(Vector3.new(0, 0.2, -dist))
+								* angle(math.rad(cfg.pitch), 0, 0)
+								* angle(0, math.rad(cfg.rotation), 0))
+						end)
 						update_preview_box()
 						update_preview_overlays()
 					end)
@@ -3540,8 +3639,14 @@ return LPH_NO_VIRTUALIZE(function()
 								if anim then anim:Destroy() end
 								local old = character
 								character = fresh
-								character.Parent = items.viewportframe
-								items.camera.CameraSubject = character
+								-- a non-character context is on screen: keep the
+								-- refreshed clone ready but DON'T parent it, or the
+								-- character would pop in over that context's model
+								if not ctx_model then
+									character.Parent = items.viewportframe
+									items.camera.CameraSubject = character
+									subject = character
+								end
 								if old then old:Destroy() end
 							end)
 						end
@@ -3769,9 +3874,12 @@ return LPH_NO_VIRTUALIZE(function()
 						if drag_ghost then pcall(function() drag_ghost:Destroy() end); drag_ghost = nil end
 					end
 
-					local layout_ctx = "player"
-					cfg._ctx = "player"
-					local function lflag() return layout_ctx == "ai" and "esp_layout_ai" or "esp_layout" end
+					local layout_ctx = CONTEXTS[1] and CONTEXTS[1].id or "player"
+					cfg._ctx = layout_ctx
+					local function lflag()
+						local c = CTX[layout_ctx]
+						return (c and c.layout) or "esp_layout"
+					end
 
 					-- per-context chip whitelist. left open by default; a consumer that wants a
 					-- chip hidden on one tab passes properties.context_filter(key, ctx) -> bool.
@@ -4367,6 +4475,55 @@ return LPH_NO_VIRTUALIZE(function()
 						for id, w in pairs(footer_frames) do w.Visible = (id == ctx) end
 					end
 
+					-- swap what the viewport is showing. a context with a `model`
+					-- provider gets its own clone; everything else falls back to
+					-- the character. the clone is built ONCE per context and kept,
+					-- so flicking between tabs isn't re-cloning a model each time.
+					local function apply_subject(ctx)
+						local c = CTX[ctx]
+						local provider = c and c.model
+
+						if provider then
+							if ctx_model_id ~= ctx then
+								if ctx_model then pcall(function() ctx_model:Destroy() end) end
+								ctx_model, ctx_model_id = nil, nil
+								local ok, m = pcall(provider)
+								if ok and typeof(m) == "Instance" then
+									local okc, clone = pcall(function() return m:Clone() end)
+									if okc and clone then
+										for _, d in ipairs(clone:GetDescendants()) do
+											if d:IsA("BasePart") then
+												d.Anchored = true
+												d.CanCollide = false; d.CanQuery = false; d.CanTouch = false
+											end
+										end
+										if clone:IsA("BasePart") then clone.Anchored = true end
+										clone.Parent = items.viewportframe
+										ctx_model, ctx_model_id = clone, ctx
+									end
+								end
+							end
+							if ctx_model then
+								if character then character.Parent = nil end
+								subject = ctx_model
+								items.camera.CameraSubject = ctx_model
+								-- not a player: the drag-to-select overlay has no
+								-- body parts to hit, so it turns itself off
+								cfg._char_ctx_on = false
+								return
+							end
+						end
+
+						if ctx_model then pcall(function() ctx_model:Destroy() end) end
+						ctx_model, ctx_model_id = nil, nil
+						subject = character
+						if character then
+							character.Parent = items.viewportframe
+							items.camera.CameraSubject = character
+						end
+						cfg._char_ctx_on = true
+					end
+
 					local function set_context(ctx)
 						if ctx == layout_ctx then return end
 						if settings_pop and settings_pop.Visible then settings_pop.Visible = false end
@@ -4380,6 +4537,7 @@ return LPH_NO_VIRTUALIZE(function()
 						save_layout()
 						layout_ctx = ctx
 						cfg._ctx = ctx
+						apply_subject(ctx)
 						show_footer(ctx)
 						local ok, err = pcall(apply_from_string, flags[lflag()])
 						if not ok then
@@ -4392,13 +4550,16 @@ return LPH_NO_VIRTUALIZE(function()
 						end
 					end
 
-					make_tab("player", "PLAYER", 1).MouseButton1Click:Connect(function() set_context("player") end)
-					make_tab("ai",     "AI",   2).MouseButton1Click:Connect(function() set_context("ai") end)
+					for i, c in ipairs(CONTEXTS) do
+						local id = c.id
+						make_tab(id, c.label, i).MouseButton1Click:Connect(function() set_context(id) end)
+					end
 
 					apply_from_string(flags[lflag()])
 					save_layout()
-					show_footer("player")
-					tab_btns.player.TextColor3 = themes.preset.accent
+					apply_subject(layout_ctx)
+					show_footer(layout_ctx)
+					if tab_btns[layout_ctx] then tab_btns[layout_ctx].TextColor3 = themes.preset.accent end
 
 					if library.config_flags then
 						local function setter(fl)
@@ -4409,8 +4570,9 @@ return LPH_NO_VIRTUALIZE(function()
 								end)
 							end
 						end
-						library.config_flags["esp_layout"]    = setter("esp_layout")
-						library.config_flags["esp_layout_ai"] = setter("esp_layout_ai")
+						for _, c in ipairs(CONTEXTS) do
+							library.config_flags[c.layout] = setter(c.layout)
+						end
 					end
 				end)
 				if not _esp_ok then
