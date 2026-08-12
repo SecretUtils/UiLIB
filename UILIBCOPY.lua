@@ -19,7 +19,6 @@ return LPH_NO_VIRTUALIZE(function()
 		local tween_service = cloneref(game:GetService("TweenService"))
 		local sound_service = cloneref(game:GetService("SoundService"))
 		local starter_gui = cloneref(game:GetService("StarterGui"))
-		local rs = cloneref(game:GetService("ReplicatedStorage"))
 
 		local vec2 = Vector2.new
 		local vec3 = Vector3.new
@@ -70,8 +69,14 @@ return LPH_NO_VIRTUALIZE(function()
 		local remove = table.remove
 		local concat = table.concat
 
+		-- branding stays; only the game-specific feature set was stripped out.
+		-- own config directory so the Fallen build never collides with Fem.Hook's configs.
+		local genv = (getgenv and getgenv()) or _G
+		local BRAND = tostring(genv.UILIB_NAME or "femboy.hook")
+
 		local library = {
-			directory = "Fem.Hook",
+			name = BRAND,
+			directory = tostring(genv.UILIB_DIRECTORY or "Fem.hookFallen"),
 			folders = {
 				"/fonts",
 				"/configs",
@@ -223,11 +228,16 @@ return LPH_NO_VIRTUALIZE(function()
 
 		library.__index = library
 
+		-- create the root first: not every executor's makefolder builds intermediate
+		-- directories, and this root is brand new rather than left over from a prior run.
+		if not (isfolder and isfolder(library.directory)) then
+			pcall(makefolder, library.directory)
+		end
 		for _, path in next, library.folders do
-			makefolder(library.directory .. path)
+			pcall(makefolder, library.directory .. path)
 		end
 
-		library.image_url = "https://raw.githubusercontent.com/SecretUtils/UiLIB/main/"
+		library.image_url = tostring(genv.UILIB_IMAGES or "https://raw.githubusercontent.com/SecretUtils/UiLIB/main/")
 
 		do
 			local stamp = library.directory .. "/images/_source.txt"
@@ -343,23 +353,26 @@ return LPH_NO_VIRTUALIZE(function()
 			end,
 		})
 
-		writefile("ffff.ttf", game:HttpGet("https://github.com/weasely111/beta/raw/refs/heads/main/fs-tahoma-8px.ttf"))
+		-- pixel font is a nicety, not a requirement. executors without writefile /
+		-- getcustomasset / http still get a working menu, just in a stock font.
+		library.font = Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.Regular)
+		pcall(function()
+			local ttf = library.directory .. "/fonts/_ui.ttf"
+			if not (isfile and isfile(ttf)) then
+				writefile(ttf, game:HttpGet(tostring(genv.UILIB_FONT_URL
+					or "https://github.com/weasely111/beta/raw/refs/heads/main/fs-tahoma-8px.ttf")))
+			end
 
-		local tahoma = {
-			name = "SmallestPixel7",
-			faces = {
-				{
-					name = "Regular",
-					weight = 400,
-					style = "normal",
-					assetId = getcustomasset("ffff.ttf")
-				}
-			}
-		}
+			local descriptor = library.directory .. "/fonts/_ui.json"
+			writefile(descriptor, http_service:JSONEncode({
+				name = "UILibPixel",
+				faces = {{name = "Regular", weight = 400, style = "normal", assetId = getcustomasset(ttf)}}
+			}))
 
-		writefile("dddd.ttf", http_service:JSONEncode(tahoma))
-
-		library.font = Font.new(getcustomasset("dddd.ttf"), Enum.FontWeight.Regular)
+			local face = Font.new(getcustomasset(descriptor), Enum.FontWeight.Regular)
+			assert(face, "font descriptor rejected")
+			library.font = face
+		end)
 
 		local config_holder
 
@@ -1934,7 +1947,7 @@ return LPH_NO_VIRTUALIZE(function()
 					end
 
 					local main_window = library:panel({
-						name = properties and properties.name or "Fem.Hook | ",
+						name = properties and properties.name or BRAND,
 						pos_key = "MainWindow",
 						size = dim2(0, 604, 0, 628),
 						position = dim2(0, (camera.ViewportSize.X / 2) - 302 - 96, 0, (camera.ViewportSize.Y / 2) - 421 - 12),
@@ -2043,7 +2056,7 @@ return LPH_NO_VIRTUALIZE(function()
 					})
 					register_icon(style, "style.png", "style2.png", "rbxassetid://115194686863276")
 
-					local watermark = library:watermark({default = os.date('Fem.Hook |  - %b %d %Y - %H:%M:%S')})
+					local watermark = library:watermark({default = BRAND .. os.date(' - %b %d %Y - %H:%M:%S')})
 
 					local wm_game_name
 					task.spawn(function()
@@ -2067,9 +2080,6 @@ return LPH_NO_VIRTUALIZE(function()
 								local parts = {}
 								local base = tostring(flags["watermark_text"] or "")
 								if base ~= "" then insert(parts, base) end
-								if library.watermark_tier and library.watermark_tier ~= "" then
-									insert(parts, string.lower(tostring(library.watermark_tier)))
-								end
 								if set["User"] then insert(parts, lp.Name) end
 								if set["Version"] then insert(parts, library.watermark_version or "v1.0") end
 								if set["FPS"] then insert(parts, fps .. " fps") end
@@ -2107,12 +2117,14 @@ return LPH_NO_VIRTUALIZE(function()
 						library:update_theme("low_contrast", flags["low_contrast"].Color)
 					end})
 					:colorpicker({name = "High", color = themes.preset.high_contrast, flag = "high_contrast", callback = function(color)
-						library:update_theme("contrast", rgbseq{
-							rgbkey(0, flags["low_contrast"].Color),
-							rgbkey(1, flags["high_contrast"].Color)
-						})
+						if (flags["high_contrast"] and flags["low_contrast"]) then
+							library:update_theme("contrast", rgbseq{
+								rgbkey(0, flags["low_contrast"].Color),
+								rgbkey(1, flags["high_contrast"].Color)
+							})
+						end
 
-						library:update_theme("high_contrast", flags["high_contrast"].Color)
+						library:update_theme("high_contrast", color)
 					end})
 					section:label({name = "Inline"})
 					:colorpicker({name = "Inline", color = themes.preset.inline, callback = function(color, alpha)
@@ -2668,6 +2680,7 @@ return LPH_NO_VIRTUALIZE(function()
 			end
 
 			function library:esp_preview(properties)
+				properties = properties or {}
 				local cfg = {items = {}, rotation = 0; objects = {};}
 
 				local function cflag(n)
@@ -2682,11 +2695,19 @@ return LPH_NO_VIRTUALIZE(function()
 					return flags["Enabled"]
 				end
 
+				-- colour flags are declared by whatever script is consuming the library, so
+				-- never index them raw - a missing picker used to hard error the whole preview.
+				local function fcol(name, fallback)
+					local v = flags[name]
+					if type(v) == "table" and v.Color then return v.Color end
+					return fallback or rgb(255, 255, 255)
+				end
+
 				local character = nil
 				if lp.Character then
 					lp.Character.Archivable = true
 					character = lp.Character:Clone()
-					character.Animate:Destroy()
+					pcall(function() character.Animate:Destroy() end)
 				end
 
 				local items = cfg.items; do
@@ -2914,28 +2935,10 @@ return LPH_NO_VIRTUALIZE(function()
 							end
 						end
 
-						if o.ammo_fill then
-							if cfg._bar_horiz and cfg._bar_horiz.ammo then
-								o.ammo_fill.AnchorPoint = vec2(0, 0); o.ammo_fill.Position = dim2(0, 0, 0, 0); o.ammo_fill.Size = dim2(0.7, 0, 1, 0)
-							else
-								o.ammo_fill.AnchorPoint = vec2(0, 1); o.ammo_fill.Position = dim2(0, 0, 1, 0); o.ammo_fill.Size = dim2(1, 0, 0.7, 0)
-							end
-						end
-
 						if o.distance then
 							local suffix = (flags["esp_dist_unit"] == "Studs") and "st" or "m"
 							local v = math.floor((math.sin(tick() * 0.6) * 0.5 + 0.5) * 100 + 0.5)
 							o.distance.Text = v .. suffix
-						end
-
-						if o.ammo_text then
-							local on = flags[cflag("Ammo_Counter")] == true
-							o.ammo_text.Visible = on
-							if on then
-								local tc = flags[cflag("Ammo_Counter_Color")]
-								if tc and tc.Color then o.ammo_text.TextColor3 = tc.Color end
-								o.ammo_text.Text = "21 / 30"
-							end
 						end
 
 						if o.holder then
@@ -2974,171 +2977,12 @@ return LPH_NO_VIRTUALIZE(function()
 						end
 					end
 
-					local STRIP3D = {
-						Script = true, LocalScript = true, ModuleScript = true,
-						Sound = true, ParticleEmitter = true, Trail = true, Beam = true,
-						PointLight = true, SpotLight = true, SurfaceLight = true,
-						Smoke = true, Fire = true, Sparkles = true,
-						ClickDetector = true, ProximityPrompt = true,
-						BillboardGui = true, SurfaceGui = true,
-					}
-					cfg._world_cache = {}
-
-					local function build_world_model(def)
-						local src = def.preview_model
-						if type(src) == "function" then
-							local ok, res = pcall(src)
-							src = ok and res or nil
-						end
-						if typeof(src) ~= "Instance" then return nil end
-						local out
-						local ok = pcall(function()
-							local clone = src:Clone()
-							for _, d in ipairs(clone:GetDescendants()) do
-								if STRIP3D[d.ClassName] then
-									d:Destroy()
-								elseif d:IsA("BasePart") then
-									d.Anchored = true
-									d.CanCollide = false; d.CanQuery = false; d.CanTouch = false
-									d.CastShadow = false
-								end
-							end
-							local centre, size
-							if clone:IsA("Model") then
-								local bb; bb, size = clone:GetBoundingBox(); centre = bb.Position
-								clone.WorldPivot = cfr(centre)
-							elseif clone:IsA("BasePart") then
-								centre, size = clone.Position, clone.Size
-							else
-								error("not a model")
-							end
-							if size.Magnitude < 0.1 then size = vec3(2, 2, 2) end
-							local dist = (size.Magnitude * 0.5) / tan(rad(items.camera.FieldOfView * 0.5)) * 1.15
-							local base = cfr(0, 0, -dist)
-							clone:PivotTo(base)
-							clone.Parent = library.cache
-							out = {model = clone, base = base,
-								top = base.Position + vec3(0, size.Y * 0.5 + 0.3, 0)}
-						end)
-						return ok and out or nil
-					end
-
-					local function world_chip_on(def, key)
-						if not (def and def.chips) then return false end
-						for _, c in ipairs(def.chips) do
-							if c.key == key then return flags[c.flag] == true end
-						end
-						return false
-					end
-
-					local function world_tag_text(def)
-						if not (def and def.preview_tags) then return nil end
-						local parts = {}
-						for _, t in ipairs(def.preview_tags) do
-							if world_chip_on(def, t.key) then
-								local v = t.color and flags[t.color]
-								local col = (v and v.Color) or themes.preset.text
-								local a = (v and tonumber(v.Transparency)) or 1
-								if a > 0.02 then
-									local txt = tostring(t.text):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")
-									local r, g, b = floor(col.R * 255 + 0.5), floor(col.G * 255 + 0.5), floor(col.B * 255 + 0.5)
-									if a >= 0.99 then
-										parts[#parts + 1] = string.format('<font color="rgb(%d,%d,%d)">%s</font>', r, g, b, txt)
-									else
-										parts[#parts + 1] = string.format('<font color="rgb(%d,%d,%d)" transparency="%.2f">%s</font>',
-											r, g, b, 1 - a, txt)
-									end
-								end
-							end
-						end
-						if #parts == 0 then return nil end
-						return concat(parts, " ")
-					end
-
-					local function ensure_world_tags()
-						if cfg._world_label then return end
-						cfg._world_icon = library:create("ImageLabel", {
-							Parent = items.viewportframe; Name = "\0"; Visible = false;
-							BackgroundTransparency = 1; BorderSizePixel = 0;
-							AnchorPoint = vec2(0.5, 1); Size = dim2(0, 24, 0, 24); ZIndex = 6;
-						})
-						cfg._world_label = library:create("TextLabel", {
-							Parent = items.viewportframe; Name = "\0"; Visible = false;
-							RichText = true; FontFace = library.font; TextSize = 12;
-							TextColor3 = themes.preset.text; BackgroundTransparency = 1;
-							BorderSizePixel = 0; AnchorPoint = vec2(0.5, 1);
-							Size = dim2(0, 240, 0, 0); AutomaticSize = Enum.AutomaticSize.Y;
-							TextXAlignment = Enum.TextXAlignment.Center; ZIndex = 6;
-						})
-					end
-
-					local function hide_world_tags()
-						if cfg._world_label then cfg._world_label.Visible = false end
-						if cfg._world_icon then cfg._world_icon.Visible = false end
-					end
-
-					local function update_world_tags()
-						local lbl, icon = cfg._world_label, cfg._world_icon
-						if not lbl then return end
-						local def, ent = cfg._world_def, cfg._world_entry
-						if not (def and ent) then hide_world_tags(); return end
-						local sp = vp_project(ent.top)
-						if not sp then hide_world_tags(); return end
-						local txt = world_tag_text(def)
-						if txt then
-							if lbl.Text ~= txt then lbl.Text = txt end
-							lbl.Position = dim2(0, sp.X, 0, sp.Y)
-							lbl.TextColor3 = themes.preset.text
-							lbl.Visible = true
-						else
-							lbl.Visible = false
-						end
-						local want_icon = def.preview_icon and world_chip_on(def, "icon")
-						local img = want_icon and library:image(def.preview_icon, nil) or nil
-						if img then
-							icon.Image = img
-							icon.Position = dim2(0, sp.X, 0, sp.Y - (txt and lbl.AbsoluteSize.Y or 0) - 2)
-							icon.Visible = true
-						else
-							icon.Visible = false
-						end
-					end
-
-					function cfg.show_world_model(def)
-						local cur = cfg._world_model
-						if cur then pcall(function() cur.Parent = library.cache end) end
-						cfg._world_model, cfg._world_base = nil, nil
-						cfg._world_def, cfg._world_entry = nil, nil
-						hide_world_tags()
-						if not (def and def.preview_model) then return end
-						local entry = cfg._world_cache[def.ctx]
-						if entry == nil then
-							entry = build_world_model(def)
-							if entry then cfg._world_cache[def.ctx] = entry end
-						end
-						if not (entry and entry.model) then return end
-						pcall(function() entry.model.Parent = items.viewportframe end)
-						cfg._world_model, cfg._world_base = entry.model, entry.base
-						cfg._world_def, cfg._world_entry = def, entry
-						ensure_world_tags()
-					end
-
 					library:connection(run.RenderStepped, function(dt)
 						if cfg._builder_on == false then return end
 						if not dragging then
 							local ease = math.clamp((dt or 1/60) * 8, 0, 1)
 							cfg.rotation = cfg.rotation + (cfg.target_rotation - cfg.rotation) * ease
 							cfg.pitch = cfg.pitch + (cfg.target_pitch - cfg.pitch) * ease
-						end
-						local wm = cfg._world_model
-						if wm then
-							pcall(function()
-								wm:PivotTo(cfg._world_base
-									* angle(math.rad(cfg.pitch), 0, 0)
-									* angle(0, math.rad(cfg.rotation - FRONT), 0))
-							end)
-							update_world_tags()
-							return
 						end
 						if not (character and character.PrimaryPart) then return end
 						character:SetPrimaryPartCFrame(cfr(Vector3.new(0, 0.2, -7.5))
@@ -3170,7 +3014,7 @@ return LPH_NO_VIRTUALIZE(function()
 					objects[ "name" ] = library:create( "TextLabel" , {
 						FontFace = library.font;
 						Parent = library.cache;
-						TextColor3 = flags["Name_Color"].Color;
+						TextColor3 = fcol("Name_Color");
 						BorderColor3 = rgb(0, 0, 0);
 						Text = string.format("%s (@%s)", lp.DisplayName, lp.Name);
 						Name = "\0";
@@ -3246,7 +3090,7 @@ return LPH_NO_VIRTUALIZE(function()
 							BorderColor3 = rgb(0, 0, 0);
 							Size = dim2(1, -2, 1, -2);
 							BorderSizePixel = 0;
-							BackgroundColor3 = flags["Box_Color"].Color
+							BackgroundColor3 = fcol("Box_Color")
 						});
 
 						objects[ "2" ] = library:create( "Frame" , {
@@ -3265,7 +3109,7 @@ return LPH_NO_VIRTUALIZE(function()
 							BorderColor3 = rgb(0, 0, 0);
 							Size = dim2(1, -2, 1, 1);
 							BorderSizePixel = 0;
-							BackgroundColor3 = flags["Box_Color"].Color
+							BackgroundColor3 = fcol("Box_Color")
 						});
 
 						objects[ "3" ] = library:create( "Frame" , {
@@ -3285,7 +3129,7 @@ return LPH_NO_VIRTUALIZE(function()
 							BorderColor3 = rgb(0, 0, 0);
 							Size = dim2(1, -2, 1, -2);
 							BorderSizePixel = 0;
-							BackgroundColor3 = flags["Box_Color"].Color
+							BackgroundColor3 = fcol("Box_Color")
 						});
 
 						objects[ "4" ] = library:create( "Frame" , {
@@ -3305,7 +3149,7 @@ return LPH_NO_VIRTUALIZE(function()
 							BorderColor3 = rgb(0, 0, 0);
 							Size = dim2(1, -2, 1, 1);
 							BorderSizePixel = 0;
-							BackgroundColor3 = flags["Box_Color"].Color
+							BackgroundColor3 = fcol("Box_Color")
 						});
 
 						objects[ "5" ] = library:create( "Frame" , {
@@ -3325,7 +3169,7 @@ return LPH_NO_VIRTUALIZE(function()
 							BorderColor3 = rgb(0, 0, 0);
 							Size = dim2(1, -2, 1, -2);
 							BorderSizePixel = 0;
-							BackgroundColor3 = flags["Box_Color"].Color
+							BackgroundColor3 = fcol("Box_Color")
 						});
 
 						objects[ "6" ] = library:create( "Frame" , {
@@ -3346,7 +3190,7 @@ return LPH_NO_VIRTUALIZE(function()
 							BorderColor3 = rgb(0, 0, 0);
 							Size = dim2(1, -2, 1, 1);
 							BorderSizePixel = 0;
-							BackgroundColor3 = flags["Box_Color"].Color
+							BackgroundColor3 = fcol("Box_Color")
 						});
 
 						objects[ "7" ] = library:create( "Frame" , {
@@ -3366,7 +3210,7 @@ return LPH_NO_VIRTUALIZE(function()
 							BorderColor3 = rgb(0, 0, 0);
 							Size = dim2(1, -2, 1, -2);
 							BorderSizePixel = 0;
-							BackgroundColor3 = flags["Box_Color"].Color
+							BackgroundColor3 = fcol("Box_Color")
 						});
 
 						objects[ "7" ] = library:create( "Frame" , {
@@ -3387,7 +3231,7 @@ return LPH_NO_VIRTUALIZE(function()
 							BorderColor3 = rgb(0, 0, 0);
 							Size = dim2(1, -2, 1, 1);
 							BorderSizePixel = 0;
-							BackgroundColor3 = flags["Box_Color"].Color
+							BackgroundColor3 = fcol("Box_Color")
 						});
 
 						objects[ "healthbar_holder" ] = library:create( "Frame" , {
@@ -3413,7 +3257,7 @@ return LPH_NO_VIRTUALIZE(function()
 
 						objects[ "distance" ] = library:create( "TextLabel" , {
 							FontFace = library.font;
-							TextColor3 = flags["Distance_Color"].Color;
+							TextColor3 = fcol("Distance_Color");
 							BorderColor3 = rgb(0, 0, 0);
 							Text = "127st";
 							Parent = library.cache;
@@ -3429,7 +3273,7 @@ return LPH_NO_VIRTUALIZE(function()
 
 						objects[ "weapon" ] = library:create( "TextLabel" , {
 							FontFace = library.font;
-							TextColor3 = flags["Weapon_Color"].Color;
+							TextColor3 = fcol("Weapon_Color");
 							BorderColor3 = rgb(0, 0, 0);
 							Text = "[ Weapon ]";
 							Parent = library.cache;
@@ -3443,9 +3287,46 @@ return LPH_NO_VIRTUALIZE(function()
 							TextSize = 12;
 						});
 
+						objects[ "clan" ] = library:create( "TextLabel" , {
+							FontFace = library.font;
+							TextColor3 = fcol("Clan_Color");
+							BorderColor3 = rgb(0, 0, 0);
+							Text = "[CLAN]";
+							Parent = library.cache;
+							TextStrokeTransparency = 0;
+							Name = "\0";
+							Size = dim2(1, 0, 0, 0);
+							BackgroundTransparency = 1;
+							Position = dim2(0, 0, 1, 33);
+							BorderSizePixel = 0;
+							AutomaticSize = Enum.AutomaticSize.Y;
+							TextSize = 12;
+						});
+
+						-- the weapon icon's PREVIEW is a text placeholder on purpose.
+						-- normalize() in the builder writes TextXAlignment on whatever
+						-- object a chip owns, which errors outright on an ImageLabel --
+						-- and the preview only has to communicate placement. the real
+						-- ESP draws an actual ImageLabel at this slot.
+						objects[ "weapon_icon" ] = library:create( "TextLabel" , {
+							FontFace = library.font;
+							TextColor3 = fcol("Weapon_Icon_Color");
+							BorderColor3 = rgb(0, 0, 0);
+							Text = "[ICON]";
+							Parent = library.cache;
+							TextStrokeTransparency = 0;
+							Name = "\0";
+							Size = dim2(1, 0, 0, 0);
+							BackgroundTransparency = 1;
+							Position = dim2(0, 0, 1, 47);
+							BorderSizePixel = 0;
+							AutomaticSize = Enum.AutomaticSize.Y;
+							TextSize = 12;
+						});
+
 						objects[ "hp_number" ] = library:create( "TextLabel" , {
 							FontFace = library.font;
-							TextColor3 = flags["HP_Text_Color"].Color;
+							TextColor3 = fcol("HP_Text_Color");
 							BorderColor3 = rgb(0, 0, 0);
 							Text = "100";
 							Parent = library.cache;
@@ -3458,24 +3339,6 @@ return LPH_NO_VIRTUALIZE(function()
 							BorderSizePixel = 0;
 							AutomaticSize = Enum.AutomaticSize.Y;
 							TextXAlignment = Enum.TextXAlignment.Right;
-							TextSize = 12;
-						});
-
-						objects[ "kd" ] = library:create( "TextLabel" , {
-							FontFace = library.font;
-							TextColor3 = flags["ESP_KD_Color"].Color;
-							BorderColor3 = rgb(0, 0, 0);
-							Text = "1.38 KD";
-							Parent = library.cache;
-							TextStrokeTransparency = 0;
-							Name = "\0";
-							AnchorPoint = vec2(0, 0);
-							Size = dim2(0, 60, 0, 0);
-							BackgroundTransparency = 1;
-							Position = dim2(1, 6, 0, 0);
-							BorderSizePixel = 0;
-							AutomaticSize = Enum.AutomaticSize.Y;
-							TextXAlignment = Enum.TextXAlignment.Left;
 							TextSize = 12;
 						});
 
@@ -3497,75 +3360,6 @@ return LPH_NO_VIRTUALIZE(function()
 							TextSize = 12;
 						});
 
-
-						objects[ "edition" ] = library:create( "TextLabel" , {
-							FontFace = library.font; Parent = library.cache;
-							TextColor3 = rgb(255, 200, 60); BorderColor3 = rgb(0, 0, 0);
-							Text = "ELITE"; Name = "\0"; TextStrokeTransparency = 0;
-							AnchorPoint = vec2(0, 0); Size = dim2(0, 80, 0, 0);
-							BackgroundTransparency = 1; Position = dim2(1, 6, 0, -14);
-							BorderSizePixel = 0; AutomaticSize = Enum.AutomaticSize.Y;
-							TextXAlignment = Enum.TextXAlignment.Left; TextSize = 12;
-						});
-
-						for i, def in ipairs({
-							{"manip",    "MANIP",     rgb(255, 220, 0)},
-							{"reload",   "RELOAD",    rgb(255, 60, 60)},
-							{"exiting",  "EXITING",   rgb(0, 235, 90)},
-							{"combat",   "[COMBAT]",  rgb(255, 60, 60)},
-							{"bleeding", "BLEEDING",  rgb(200, 30, 60)},
-							{"stims",    "[G 4m53s]", rgb(80, 220, 120)},
-							{"looting",  "LOOTING",   rgb(255, 220, 50)},
-							{"lookat",   "[LOOK 42]", rgb(120, 200, 255)},
-							{"stats",    "[ STATS ]", rgb(200, 200, 200)},
-						}) do
-							objects[ def[1] ] = library:create( "TextLabel" , {
-								FontFace = library.font; Parent = library.cache;
-								TextColor3 = def[3]; BorderColor3 = rgb(0, 0, 0);
-								Text = def[2]; Name = "\0"; TextStrokeTransparency = 0;
-								AnchorPoint = vec2(0, 0); Size = dim2(0, 90, 0, 0);
-								BackgroundTransparency = 1; Position = dim2(1, 6, 0, 28 + (i - 1) * 14);
-								BorderSizePixel = 0; AutomaticSize = Enum.AutomaticSize.Y;
-								TextXAlignment = Enum.TextXAlignment.Left; TextSize = 12;
-							});
-						end
-
-						objects[ "ammo_bg" ] = library:create( "Frame" , {
-							Parent = library.cache; Name = "\0"; BorderColor3 = rgb(0, 0, 0);
-							BackgroundColor3 = rgb(36, 36, 36); BorderSizePixel = 0;
-							AnchorPoint = vec2(0.5, 0); Position = dim2(0.5, 0, 1, 3); Size = dim2(1, 0, 0, 3);
-						});
-						library:create( "UIStroke" , {
-							Parent = objects[ "ammo_bg" ]; Name = "\0"; Color = rgb(0, 0, 0);
-							LineJoinMode = Enum.LineJoinMode.Miter;
-						});
-						objects[ "ammo_fill" ] = library:create( "Frame" , {
-							Parent = objects[ "ammo_bg" ]; Name = "\0"; BorderColor3 = rgb(0, 0, 0);
-							BackgroundColor3 = rgb(130, 170, 255); BorderSizePixel = 0;
-							Position = dim2(0, 0, 0, 0); Size = dim2(0.7, 0, 1, 0);
-						});
-						objects[ "ammo_grad" ] = library:create( "UIGradient" , {
-							Parent = objects[ "ammo_fill" ]; Name = "\0";
-							Color = ColorSequence.new(rgb(130, 170, 255), rgb(89, 122, 255));
-						});
-						objects[ "ammo_text" ] = library:create( "TextLabel" , {
-							Parent = objects[ "ammo_bg" ]; Name = "\0"; Visible = false;
-							FontFace = library.font; TextColor3 = rgb(255, 255, 255); BorderColor3 = rgb(0, 0, 0);
-							Text = "21 / 30"; TextStrokeTransparency = 0;
-							AnchorPoint = vec2(0.5, 0); Size = dim2(1, 0, 0, 0);
-							BackgroundTransparency = 1; Position = dim2(0.5, 0, 1, 2);
-							BorderSizePixel = 0; AutomaticSize = Enum.AutomaticSize.Y;
-							TextXAlignment = Enum.TextXAlignment.Center; TextSize = 11;
-						});
-						objects[ "ammo_counter" ] = library:create( "TextLabel" , {
-							FontFace = library.font; Parent = library.cache;
-							TextColor3 = rgb(255, 255, 255); BorderColor3 = rgb(0, 0, 0);
-							Text = "21 / 30"; Name = "\0"; TextStrokeTransparency = 0;
-							AnchorPoint = vec2(0, 0); Size = dim2(0, 90, 0, 0);
-							BackgroundTransparency = 1; Position = dim2(1, 6, 0, 0);
-							BorderSizePixel = 0; AutomaticSize = Enum.AutomaticSize.Y;
-							TextXAlignment = Enum.TextXAlignment.Left; TextSize = 12;
-						});
 
 						objects[ "head_dot" ] = library:create( "Frame" , {
 							Parent = items.viewportframe; Name = "\0"; Visible = false;
@@ -3656,8 +3450,6 @@ return LPH_NO_VIRTUALIZE(function()
 						["Weapon_Color"] = {objects[ "weapon" ]};
 						["HP_Text"] = objects[ "hp_number" ];
 						["HP_Text_Color"] = {objects[ "hp_number" ]};
-						["ESP_KD"] = objects[ "kd" ];
-						["ESP_KD_Color"] = {objects[ "kd" ]};
 					}
 
 					for flag,object in temp do
@@ -3721,46 +3513,9 @@ return LPH_NO_VIRTUALIZE(function()
 						objects["healthbar_holder"].Parent = hp_on and objects["holder"] or library.cache
 					end
 
-					if objects["edition"] then
-						local ec = flags[cflag("ESP_Edition_Elite")]
-						if ec and ec.Color then objects["edition"].TextColor3 = ec.Color end
-					end
-
-					do
-						local sel = flags[cflag("ESP_Status_Sel")]
-						local set = {}
-						if type(sel) == "table" then for _, v in ipairs(sel) do set[v] = true end
-						elseif type(sel) == "string" then set[sel] = true end
-						local status_map = {
-							{"vis",     "Visible", "ESP_Vis_Color"},
-							{"manip",   "Manip",   "ESP_Manip_Color"},
-							{"reload",  "Reload",  "ESP_Reload_Color"},
-							{"exiting", "Exiting", "ESP_Exit_Color"},
-							{"combat",  "Combat",  "ESP_Combat_Color"},
-							{"bleeding", "Bleeding", "ESP_Bleed_Color"},
-							{"stims",   "Stims",   "ESP_Stim_Color"},
-							{"looting", "Looting", "ESP_Loot_Color"},
-							{"lookat",  "LookAt",  "ESP_LookAt_Color"},
-						}
-						for _, s in ipairs(status_map) do
-							local obj = objects[s[1]]
-							if obj then
-								local c = flags[cflag(s[3])]
-								if c and c.Color then obj.TextColor3 = c.Color end
-							end
-						end
-					end
-
-					if objects["ammo_bg"] then
-						local ammo_on
-						if cfg._show then ammo_on = cfg._show.ammo == true else ammo_on = flags[cflag("Ammobar")] == true end
-						objects["ammo_bg"].Parent = ammo_on and objects["holder"] or library.cache
-						local bg = flags[cflag("Ammo_BG_Color")]
-						if bg and bg.Color then objects["ammo_bg"].BackgroundColor3 = bg.Color end
-						local c1, c2 = flags[cflag("Ammo_Color_Top")], flags[cflag("Ammo_Color_Bottom")]
-						if objects["ammo_grad"] and c1 and c2 and c1.Color and c2.Color then
-							objects["ammo_grad"].Color = ColorSequence.new(c1.Color, c2.Color)
-						end
+					if objects["vis"] then
+						local c = flags[cflag("ESP_Vis_Color")]
+						if c and c.Color then objects["vis"].TextColor3 = c.Color end
 					end
 				end
 
@@ -3802,27 +3557,16 @@ return LPH_NO_VIRTUALIZE(function()
 					local CHIPS = {
 						{key = "name",      label = "Name"},
 						{key = "distance",  label = "Distance"},
-						{key = "weapon",    label = "Weapon"},
+						{key = "weapon",      label = "Weapon"},
+						{key = "weapon_icon", label = "Weapon Icon"},
+						{key = "clan",        label = "Clan"},
 						{key = "hp_number", label = "HP"},
-						{key = "kd",        label = "KD"},
-						{key = "edition",   label = "Edition"},
 						{key = "vis",       label = "Visible"},
-						{key = "manip",     label = "Manip"},
-						{key = "reload",    label = "Reload"},
-						{key = "exiting",   label = "Exiting"},
-						{key = "combat",    label = "Combat"},
-						{key = "bleeding",  label = "Bleeding"},
-						{key = "stims",     label = "Stims"},
-						{key = "looting",   label = "Looting"},
-						{key = "lookat",    label = "Look At"},
-						{key = "stats",     label = "Stats"},
-							{key = "ammo_counter", label = "Ammo Count"},
 						{key = "box",       label = "Box",       global = true},
 						{key = "skeleton",  label = "Skeleton",  global = true},
 						{key = "chams",     label = "Chams",     global = true},
 						{key = "head_dot",  label = "Head Dot",  global = true},
 						{key = "healthbar", label = "Healthbar", bar = true},
-						{key = "ammo",      label = "Ammo Bar",  bar = true},
 					}
 					local DEFAULT_SIDE = {}
 					local SIDES = {"top", "bottom", "left", "right"}
@@ -3833,13 +3577,13 @@ return LPH_NO_VIRTUALIZE(function()
 					for _, c in ipairs(CHIPS) do if c.bar then BAR_KEYS[c.key] = true end end
 					local LABELS = {}
 					for _, c in ipairs(CHIPS) do LABELS[c.key] = c.label end
-					local GLOBAL_FLAG = { box = "Boxes", skeleton = "Skeleton", chams = "Chams", head_dot = "HeadDot", healthbar = "Healthbar", ammo = "Ammobar" }
+					local GLOBAL_FLAG = { box = "Boxes", skeleton = "Skeleton", chams = "Chams", head_dot = "HeadDot", healthbar = "Healthbar" }
 					cfg._show = {}
 					for k in pairs(GLOBAL_KEYS) do cfg._show[k] = false end
 					for k in pairs(BAR_KEYS)    do cfg._show[k] = false end
 
 					cfg._chip_set = {}
-					for _, k in ipairs({"name", "distance", "weapon", "hp_number", "kd"}) do
+					for _, k in ipairs({"name", "distance", "weapon", "hp_number"}) do
 						if objects[k] then cfg._chip_set[objects[k]] = true end
 					end
 
@@ -3877,11 +3621,12 @@ return LPH_NO_VIRTUALIZE(function()
 						end
 					end
 
-					local DEFAULT_BAR_SIDE = { healthbar = "left", ammo = "bottom" }
+					local DEFAULT_BAR_SIDE = { healthbar = "left" }
 					cfg._bar_horiz = cfg._bar_horiz or {}
-					local BAR_ORDER = { "healthbar", "ammo" }
+					local BAR_ORDER = { "healthbar" }
+					local BAR_WIDTH_FLAG = { healthbar = "hp_bar_width" }
 					local function bar_outer(key)
-						return (key == "healthbar") and objects.healthbar_holder or objects.ammo_bg
+						return (key == "healthbar") and objects.healthbar_holder or objects[key .. "_bg"]
 					end
 					local placed
 					local function layout_bars_on_side(side)
@@ -3895,7 +3640,7 @@ return LPH_NO_VIRTUALIZE(function()
 							local outer = bar_outer(key)
 							if outer then
 								cfg._bar_horiz[key] = horiz
-								local wf = (key == "healthbar") and "hp_bar_width" or "ammo_bar_width"
+								local wf = BAR_WIDTH_FLAG[key] or (key .. "_bar_width")
 								local T = math.clamp(tonumber(flags[cflag(wf)]) or 3, 1, 8)
 								local frac = 1 / n
 								local off  = (i - 1) * frac
@@ -3914,7 +3659,8 @@ return LPH_NO_VIRTUALIZE(function()
 									outer.Position    = dim2(px, ox, off, 1)
 									outer.Size        = dim2(0, T, frac, -2)
 								end
-								if key == "ammo" and objects.ammo_grad then objects.ammo_grad.Rotation = horiz and 0 or 90 end
+								local grad = objects[key .. "_grad"]
+								if grad then grad.Rotation = horiz and 0 or 90 end
 							end
 						end
 					end
@@ -3927,11 +3673,11 @@ return LPH_NO_VIRTUALIZE(function()
 
 					local function bar_depth(s)
 						local d = 0
-						if placed.healthbar == s then
-							d = math.max(d, math.clamp(tonumber(flags[cflag("hp_bar_width")]) or 3, 1, 8))
-						end
-						if placed.ammo == s then
-							d = math.max(d, math.clamp(tonumber(flags[cflag("ammo_bar_width")]) or 3, 1, 8))
+						for _, key in ipairs(BAR_ORDER) do
+							if placed[key] == s then
+								local wf = BAR_WIDTH_FLAG[key] or (key .. "_bar_width")
+								d = math.max(d, math.clamp(tonumber(flags[cflag(wf)]) or 3, 1, 8))
+							end
 						end
 						return (d > 0) and (d + 6) or 0
 					end
@@ -4003,7 +3749,7 @@ return LPH_NO_VIRTUALIZE(function()
 					local chip_active   = {}
 
 					local dragging, hover_side, hover_before, hover_palette = nil, nil, nil, false
-					local last_hpw, last_ammow
+					local last_hpw
 
 					local drag_ghost = nil
 					local function make_drag_ghost(label)
@@ -4027,14 +3773,14 @@ return LPH_NO_VIRTUALIZE(function()
 					cfg._ctx = "player"
 					local function lflag() return layout_ctx == "ai" and "esp_layout_ai" or "esp_layout" end
 
-					local NO_AI  = { kd = true, stims = true, combat = true, bleeding = true,
-						exiting = true, looting = true }
-					local ONLY_AI = { lookat = true }
+					-- per-context chip whitelist. left open by default; a consumer that wants a
+					-- chip hidden on one tab passes properties.context_filter(key, ctx) -> bool.
 					local function ctx_allows(key)
-						local ai = layout_ctx == "ai"
-						if NO_AI[key] then return not ai end
-						if ONLY_AI[key] then return ai end
-						return true
+						local f = properties.context_filter
+						if type(f) ~= "function" then return true end
+						local ok, allow = pcall(f, key, layout_ctx)
+						if not ok then return true end
+						return allow ~= false
 					end
 
 					local function relayout(side)
@@ -4076,13 +3822,12 @@ return LPH_NO_VIRTUALIZE(function()
 
 					local REAL_FLAG = {
 						box = "Boxes", skeleton = "Skeleton", chams = "Chams", head_dot = "HeadDot",
-						healthbar = "Healthbar", ammo = "Ammobar",
+						healthbar = "Healthbar",
 						name = "Names", distance = "Distance", weapon = "Weapon",
-						hp_number = "HP_Text", kd = "ESP_KD", edition = "ESP_Edition", ammo_counter = "Ammo_Counter",
+						hp_number = "HP_Text",
+						weapon_icon = "Weapon_Icon", clan = "Clan_Tag",
 					}
-					local STATUS_MAP = { vis = "Visible", manip = "Manip", reload = "Reload",
-						exiting = "Exiting", combat = "Combat", bleeding = "Bleeding", looting = "Looting",
-						stims = "Stims", lookat = "LookAt" }
+					local STATUS_MAP = { vis = "Visible" }
 					local function sync_status(key, on)
 						local name = STATUS_MAP[key]
 						if not name then return end
@@ -4267,7 +4012,6 @@ return LPH_NO_VIRTUALIZE(function()
 						if o.head_dot and o.head_dot.Visible and library:hovering(o.head_dot) then return o.head_dot, "head_dot" end
 						if o.chams_box and o.chams_box.Visible and library:hovering(o.chams_box) then return o.chams_box, "chams" end
 						if o.skel_box and o.skel_box.Visible and library:hovering(o.skel_box) then return o.skel_box, "skeleton" end
-						if o.ammo_bg and o.ammo_bg.Parent == o.holder and library:hovering(o.ammo_bg) then return o.ammo_bg, "ammo" end
 						if o.healthbar_holder and o.healthbar_holder.Parent == o.holder and library:hovering(o.healthbar_holder) then return o.healthbar_holder, "healthbar" end
 						for key, side in pairs(placed) do
 							if not GLOBAL_KEYS[key] and not BAR_KEYS[key] then
@@ -4326,9 +4070,8 @@ return LPH_NO_VIRTUALIZE(function()
 							kill_drag_ghost()
 							return
 						end
-						local hw, aw = flags["hp_bar_width"], flags["ammo_bar_width"]
+						local hw = flags["hp_bar_width"]
 						if hw ~= last_hpw then last_hpw = hw; if placed.healthbar then layout_bars_on_side(placed.healthbar) end end
-						if aw ~= last_ammow then last_ammow = aw; if placed.ammo then layout_bars_on_side(placed.ammo) end end
 						update_selection()
 					end)
 
@@ -4594,73 +4337,6 @@ return LPH_NO_VIRTUALIZE(function()
 						return b
 					end
 
-					local world_defs = properties.world_contexts or {}
-					local WORLD = {}
-					for _, d in ipairs(world_defs) do WORLD[d.ctx] = d end
-					local function is_world(ctx) return WORLD[ctx] ~= nil end
-
-					local world_tray = library:create("Frame", {
-						Parent = self.holder; Name = "\0"; LayoutOrder = 50; Visible = false;
-						Size = dim2(1, -8, 0, 0); AutomaticSize = Enum.AutomaticSize.Y;
-						BackgroundTransparency = 1; BorderSizePixel = 0;
-					})
-					local world_frames = {}
-					local function world_master_refresh(def)
-						local anyOn = false
-						for _, c in ipairs(def.chips) do if flags[c.flag] == true then anyOn = true; break end end
-						local _ = anyOn
-					end
-					for _, def in ipairs(world_defs) do
-						local wf = library:create("Frame", {
-							Parent = world_tray; Name = "\0"; Visible = false;
-							Size = dim2(1, 0, 0, 0); AutomaticSize = Enum.AutomaticSize.Y;
-							BackgroundTransparency = 1; BorderSizePixel = 0;
-						})
-						local wl = library:create("UIListLayout", {
-							Parent = wf; FillDirection = Enum.FillDirection.Horizontal;
-							HorizontalAlignment = Enum.HorizontalAlignment.Left;
-							SortOrder = Enum.SortOrder.LayoutOrder; Padding = dim(0, 6);
-						})
-						pcall(function() wl.Wraps = true end)
-						world_frames[def.ctx] = wf
-						for i, chip in ipairs(def.chips) do
-							local btn = library:create("TextLabel", {
-								Parent = wf; Name = "\0"; Active = true; FontFace = library.font;
-								Text = chip.label; TextColor3 = TXT; BackgroundColor3 = ACCENT;
-								BackgroundTransparency = 1; BorderSizePixel = 0; LayoutOrder = i;
-								AutomaticSize = Enum.AutomaticSize.X; Size = dim2(0, 0, 0, 16); TextSize = 12;
-							})
-							library:apply_theme(btn, "accent", "BackgroundColor3")
-							library:create("UIPadding", {Parent = btn; PaddingLeft = dim(0, 5); PaddingRight = dim(0, 5)})
-							local function paint() btn.BackgroundTransparency = (flags[chip.flag] == true) and 0.35 or 1 end
-							paint()
-							library:connection(btn.InputBegan, function(input)
-								if input.UserInputType == Enum.UserInputType.MouseButton1
-									or input.UserInputType == Enum.UserInputType.Touch then
-									flags[chip.flag] = not (flags[chip.flag] == true)
-									world_master_refresh(def)
-									paint()
-									if properties.on_apply then pcall(properties.on_apply, chip.key, flags[chip.flag], def.ctx) end
-								elseif input.UserInputType == Enum.UserInputType.MouseButton2 and chip.panel then
-									show_panel("w:" .. def.ctx .. ":" .. chip.key, chip.label, function(host) chip.panel(host, chip, def) end)
-								end
-							end)
-						end
-					end
-					local function show_world_ctx(ctx)
-						for id, wf in pairs(world_frames) do wf.Visible = (id == ctx) end
-						world_tray.Visible = (ctx ~= nil)
-					end
-					local function show_char_preview(on)
-						if character then character.Parent = on and items.viewportframe or library.cache end
-						if objects.holder then objects.holder.Visible = on end
-						if tray_wrap then tray_wrap.Visible = on end
-						for _, s in ipairs(SIDES) do if containers[s] then containers[s].Visible = on end end
-						if sel_overlay and not on then sel_overlay.Visible = false end
-						cfg._char_ctx_on = on
-						if not on then cfg._selected_key = nil end
-					end
-
 					local footer_defs = properties.context_footers or {}
 					local footer_tray = library:create("Frame", {
 						Parent = self.holder; Name = "\0"; LayoutOrder = 60;
@@ -4701,25 +4377,16 @@ return LPH_NO_VIRTUALIZE(function()
 								library.current_element_open = nil
 							end)
 						end
-						if not is_world(layout_ctx) then save_layout() end
+						save_layout()
 						layout_ctx = ctx
-						if not is_world(ctx) then cfg._ctx = ctx end
+						cfg._ctx = ctx
 						show_footer(ctx)
-						if is_world(ctx) then
-							show_char_preview(false)
-							show_world_ctx(ctx)
-							pcall(cfg.show_world_model, WORLD[ctx])
-						else
-							show_world_ctx(nil)
-							show_char_preview(true)
-							pcall(cfg.show_world_model, nil)
-							local ok, err = pcall(apply_from_string, flags[lflag()])
-							if not ok then
-								warn("[ESP tab " .. tostring(ctx) .. "] " .. tostring(err))
-								pcall(function() library:log("ESP tab switch to '" .. tostring(ctx) .. "' failed: " .. tostring(err), "ERROR") end)
-							end
-							save_layout()
+						local ok, err = pcall(apply_from_string, flags[lflag()])
+						if not ok then
+							warn("[ESP tab " .. tostring(ctx) .. "] " .. tostring(err))
+							pcall(function() library:log("ESP tab switch to '" .. tostring(ctx) .. "' failed: " .. tostring(err), "ERROR") end)
 						end
+						save_layout()
 						for k, b in pairs(tab_btns) do
 							b.TextColor3 = (k == ctx) and themes.preset.accent or themes.preset.text
 						end
@@ -4727,14 +4394,6 @@ return LPH_NO_VIRTUALIZE(function()
 
 					make_tab("player", "PLAYER", 1).MouseButton1Click:Connect(function() set_context("player") end)
 					make_tab("ai",     "AI",   2).MouseButton1Click:Connect(function() set_context("ai") end)
-					do
-						local ord = 3
-						for _, def in ipairs(world_defs) do
-							local id = def.ctx
-							make_tab(id, def.label, ord).MouseButton1Click:Connect(function() set_context(id) end)
-							ord = ord + 1
-						end
-					end
 
 					apply_from_string(flags[lflag()])
 					save_layout()
@@ -10075,7 +9734,7 @@ return LPH_NO_VIRTUALIZE(function()
 						end
 
 						if cfg.labels.player then
-							local obj  = players[player_name.Text]
+							local obj  = players:FindFirstChild(player_name.Text)
 							local disp = (obj and obj.DisplayName) or player_name.Text
 							local uid  = (obj and obj.UserId) or 0
 							cfg.labels.player.set("Player: " .. disp .. " (@" .. player_name.Text .. ")")
@@ -10171,7 +9830,7 @@ return LPH_NO_VIRTUALIZE(function()
 					cfg.search(txt)
 				end})
 				cfg.labels.player = self:label({name = "Player: ??"})
-				cfg.labels.stats  = self:label({name = "User ID: ?? / KD: ?? / Hours Played: ??"})
+				cfg.labels.stats  = self:label({name = "User ID: ??"})
 
 				return setmetatable(cfg, library)
 			end
