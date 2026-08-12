@@ -4348,9 +4348,16 @@ return LPH_NO_VIRTUALIZE(function()
 
 					local function pick_hover()
 						local o = objects
-						if o.head_dot and o.head_dot.Visible and library:hovering(o.head_dot) then return o.head_dot, "head_dot" end
+						-- HEAD DOT AND SKELETON are the only character-SHAPED
+						-- overlays: they sit on a rig, and a rock hasn't got one.
+						-- Everything else -- the box, the chams overlay, the health
+						-- bar, every text chip -- is measured off the subject's own
+						-- bounding box and hits exactly the same on a dropped rifle
+						-- as on a player, so only these two opt out.
+						local char_ctx = cfg._char_ctx_on ~= false
+						if char_ctx and o.head_dot and o.head_dot.Visible and library:hovering(o.head_dot) then return o.head_dot, "head_dot" end
 						if o.chams_box and o.chams_box.Visible and library:hovering(o.chams_box) then return o.chams_box, "chams" end
-						if o.skel_box and o.skel_box.Visible and library:hovering(o.skel_box) then return o.skel_box, "skeleton" end
+						if char_ctx and o.skel_box and o.skel_box.Visible and library:hovering(o.skel_box) then return o.skel_box, "skeleton" end
 						if o.healthbar_holder and o.healthbar_holder.Parent == o.holder and library:hovering(o.healthbar_holder) then return o.healthbar_holder, "healthbar" end
 						for key, side in pairs(placed) do
 							if not GLOBAL_KEYS[key] and not BAR_KEYS[key] then
@@ -4363,11 +4370,14 @@ return LPH_NO_VIRTUALIZE(function()
 					end
 					cfg._selected_key = nil
 					local function update_selection()
-						if cfg._char_ctx_on == false then
-							if sel_overlay.Visible then sel_overlay.Visible = false end
-							cfg._selected_key = nil
-							return
-						end
+						-- This used to bail outright on a non-character context, and
+						-- that killed FAR more than it meant to: _selected_key is the
+						-- only thing right-click reads, and the only thing the
+						-- drag-a-global-off-the-preview handler reads. So on NODE and
+						-- ITEM nothing could be right-clicked for its settings and no
+						-- placed global -- chams especially, which has nowhere else to
+						-- be grabbed -- could be picked back up. pick_hover skips the
+						-- two rig-shaped overlays on its own now.
 						if dragging then sel_overlay.Visible = false; cfg._selected_key = nil; return end
 						local e, key = pick_hover()
 						if not e then sel_overlay.Visible = false; cfg._selected_key = nil; return end
@@ -4400,6 +4410,27 @@ return LPH_NO_VIRTUALIZE(function()
 							else
 								kill_drag_ghost()
 							end
+						end
+						-- THE MASTER ENABLE HAS NO OTHER WATCHER.
+						--
+						-- refresh_elements() parents the whole holder -- the box, all
+						-- four side containers, and therefore every placed chip --
+						-- on cmaster(), and it is only ever called when a GLOBAL or
+						-- BAR chip is placed, when the context tab changes, or when
+						-- a config is applied. The master itself is a plain toggle
+						-- in the consumer's footer: it writes its flag and nothing
+						-- reacts.
+						--
+						-- So turning the ESP on left the holder detached, and every
+						-- chip you dropped went into an unparented container and
+						-- vanished, until you happened to drag BOX on -- a global,
+						-- so it ran the refresh, so everything appeared at once.
+						-- That's the "can't place anything until the box is down".
+						--
+						-- One comparison per frame, and the toggle is now live.
+						do
+							local want = cmaster() and items.viewportframe or library.cache
+							if objects.holder.Parent ~= want then objects.holder.Parent = want end
 						end
 						update_drop_target()
 						cfg._builder_on = builder_visible()
@@ -4739,8 +4770,9 @@ return LPH_NO_VIRTUALIZE(function()
 								if character then character.Parent = nil end
 								subject = ctx_model
 								items.camera.CameraSubject = ctx_model
-								-- not a player: the drag-to-select overlay has no
-								-- body parts to hit, so it turns itself off
+								-- not a player, so the RIG-shaped overlays (head dot,
+								-- skeleton) have nothing to sit on. Selection itself
+								-- stays live -- see pick_hover.
 								cfg._char_ctx_on = false
 								return
 							end
