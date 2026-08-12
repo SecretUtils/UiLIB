@@ -4077,27 +4077,17 @@ return LPH_NO_VIRTUALIZE(function()
 					-- drop was silently thrown away. Being Active, they were also
 					-- eating the click-drag that spins the preview.
 					--
-					-- So they are pure VISUALS now: inert, invisible at rest, and
-					-- lit while a chip is in flight. The side is resolved
-					-- geometrically every frame instead (see update_drop_target).
+					-- So they are pure HIT RECTS now: inert, never drawn. Nothing
+					-- about them is visible at any point -- the placement preview
+					-- is the chip itself, sitting where it would land.
 					local zones = {}
 					local function make_zone(anchor, pos, size, side)
-						local z = library:create("Frame", {
+						zones[side] = library:create("Frame", {
 							Parent = holder; Name = "\0"; Active = false;
-							BackgroundColor3 = ACCENT; BackgroundTransparency = 1;
+							BackgroundTransparency = 1; BackgroundColor3 = rgb(255, 255, 255);
 							AnchorPoint = anchor; Position = pos; Size = size;
 							BorderSizePixel = 0; ZIndex = 2;
 						})
-						library:apply_theme(z, "accent", "BackgroundColor3")
-						local cap = library:create("TextLabel", {
-							Parent = z; Name = "\0"; FontFace = library.font;
-							Text = side:upper(); TextColor3 = ACCENT; TextTransparency = 1;
-							TextSize = 11; ZIndex = 2; Size = dim2(1, 0, 1, 0);
-							BackgroundTransparency = 1; BorderSizePixel = 0;
-							BackgroundColor3 = rgb(255, 255, 255);
-						})
-						library:apply_theme(cap, "accent", "TextColor3")
-						zones[side] = {frame = z, cap = cap}
 					end
 					make_zone(vec2(0.5, 1), dim2(0.5, 0, 0, 0), dim2(2, 24, 0, 55), "top")
 					make_zone(vec2(0.5, 0), dim2(0.5, 0, 1, 0), dim2(2, 24, 0, 55), "bottom")
@@ -4139,30 +4129,67 @@ return LPH_NO_VIRTUALIZE(function()
 						-- its bottom edge), so the insertion point is the topmost
 						-- chip the pointer is still above. nil = append.
 						local function stack_scan(side, key)
-							local before, before_mid, tail, tail_y
+							local before, before_mid
 							for k, s in pairs(placed) do
 								if s == side and k ~= key and not GLOBAL_KEYS[k] and not BAR_KEYS[k] then
 									local o = objects[k]
 									if o and o.Visible then
-										local top = o.AbsolutePosition.Y
-										local mid = top + o.AbsoluteSize.Y * 0.5
+										local mid = o.AbsolutePosition.Y + o.AbsoluteSize.Y * 0.5
 										if mouse.Y < mid and (not before_mid or mid < before_mid) then
 											before, before_mid = k, mid
 										end
-										if not tail_y or top > tail_y then tail, tail_y = o, top end
 									end
 								end
 							end
-							return before, (before and objects[before]) or tail, before ~= nil
+							return before
 						end
 
-						-- a 2px accent rule where the chip will land, so the ORDER
-						-- within a side is as visible as the side itself
-						local caret = library:create("Frame", {
-							Parent = items.viewportframe; Name = "\0"; Visible = false;
-							BackgroundColor3 = ACCENT; BorderSizePixel = 0; ZIndex = 10;
+						-- THE PREVIEW IS A REAL CHIP IN THE REAL CONTAINER.
+						--
+						-- Same font, same size, same padding, parented to the side
+						-- it would land on with a LayoutOrder that drops it into
+						-- the exact slot -- so the chips already there shift to
+						-- make room and you are looking at the finished layout
+						-- before you let go. That is the thing a tint over a
+						-- quarter of the preview could never tell you: not which
+						-- SIDE, but which line, at what size, next to what.
+						local ghost = library:create("TextLabel", {
+							Parent = library.cache; Name = "\0"; Visible = false;
+							FontFace = library.font; Text = ""; TextSize = 13;
+							TextColor3 = TXT; BackgroundColor3 = ACCENT;
+							BackgroundTransparency = 0.45; TextTransparency = 0.15;
+							BorderSizePixel = 0; ZIndex = 7;
+							AutomaticSize = Enum.AutomaticSize.XY; Size = dim2(0, 0, 0, 0);
+							TextXAlignment = Enum.TextXAlignment.Center;
 						})
-						library:apply_theme(caret, "accent", "BackgroundColor3")
+						library:apply_theme(ghost, "accent", "BackgroundColor3")
+						library:create("UIPadding", {Parent = ghost;
+							PaddingLeft = dim(0, 3); PaddingRight = dim(0, 3)})
+
+						-- a bar doesn't stack, it runs down an edge, so it previews
+						-- as the strip it would become -- at its real thickness
+						local bar_ghost = library:create("Frame", {
+							Parent = holder; Name = "\0"; Visible = false;
+							BackgroundColor3 = ACCENT; BackgroundTransparency = 0.4;
+							BorderSizePixel = 0; ZIndex = 7;
+						})
+						library:apply_theme(bar_ghost, "accent", "BackgroundColor3")
+
+						-- the chip being dragged is hidden from its old slot while
+						-- it's in flight, or the stack shows it twice and the
+						-- preview stops being a preview of the result
+						local hidden_src
+						local function clear()
+							if ghost.Parent ~= library.cache then
+								ghost.Visible = false
+								ghost.Parent = library.cache
+							end
+							if bar_ghost.Visible then bar_ghost.Visible = false end
+							if hidden_src then
+								if hidden_src.Parent then hidden_src.Visible = true end
+								hidden_src = nil
+							end
+						end
 
 						return function()
 							local key = dragging
@@ -4180,44 +4207,71 @@ return LPH_NO_VIRTUALIZE(function()
 								else
 									local side
 									for _, s in ipairs(SIDES) do
-										local z = zones[s]
-										if z and point_in(z.frame) then side = s break end
+										if zones[s] and point_in(zones[s]) then side = s break end
 									end
 									hover_side = side or nearest_side()
 									hover_before = nil
 									if not BAR_KEYS[key] then
-										hover_before = (stack_scan(hover_side, key))
+										hover_before = stack_scan(hover_side, key)
 									end
 								end
 							end
 
-							local lit = hover_side ~= nil
-							local base = lit and 0.93 or 1
-							for _, s in ipairs(SIDES) do
-								local z = zones[s]
-								if z then
-									local bg  = (hover_side == s) and 0.78 or base
-									local txt = (hover_side == s) and 0.15 or (lit and 0.7 or 1)
-									if z.frame.BackgroundTransparency ~= bg then z.frame.BackgroundTransparency = bg end
-									if z.cap.TextTransparency ~= txt then z.cap.TextTransparency = txt end
+							if not hover_side then clear() return end
+
+							if BAR_KEYS[key] then
+								if ghost.Parent ~= library.cache then
+									ghost.Visible = false; ghost.Parent = library.cache
 								end
+								local wf = BAR_WIDTH_FLAG[key] or (key .. "_bar_width")
+								local T = math.clamp(tonumber(flags[cflag(wf)]) or 3, 1, 8)
+								if hover_side == "top" then
+									bar_ghost.AnchorPoint = vec2(0, 1)
+									bar_ghost.Position = dim2(0, 1, 0, -3); bar_ghost.Size = dim2(1, -2, 0, T)
+								elseif hover_side == "bottom" then
+									bar_ghost.AnchorPoint = vec2(0, 0)
+									bar_ghost.Position = dim2(0, 1, 1, 3);  bar_ghost.Size = dim2(1, -2, 0, T)
+								elseif hover_side == "left" then
+									bar_ghost.AnchorPoint = vec2(1, 0)
+									bar_ghost.Position = dim2(0, -3, 0, 1); bar_ghost.Size = dim2(0, T, 1, -2)
+								else
+									bar_ghost.AnchorPoint = vec2(0, 0)
+									bar_ghost.Position = dim2(1, 3, 0, 1);  bar_ghost.Size = dim2(0, T, 1, -2)
+								end
+								bar_ghost.Visible = true
+								return
+							end
+							bar_ghost.Visible = false
+
+							-- take the dragged chip out of its old slot
+							if not hidden_src then
+								local src = placed[key] and objects[key]
+								if src then hidden_src = src; src.Visible = false end
 							end
 
-							if lit and not BAR_KEYS[key] then
-								local _, anchor_o, above = stack_scan(hover_side, key)
-								if anchor_o then
-									local vpp = items.viewportframe.AbsolutePosition
-									local ap, av = anchor_o.AbsolutePosition, anchor_o.AbsoluteSize
-									caret.Position = dim2(0, ap.X - vpp.X,
-										0, (above and (ap.Y - 3) or (ap.Y + av.Y + 1)) - vpp.Y)
-									caret.Size = dim2(0, math.max(av.X, 24), 0, 2)
-									caret.Visible = true
-								else
-									caret.Visible = false   -- empty side: the zone says it all
+							-- LAYOUT ORDERS ARE DOUBLED while a drag is live, so the
+							-- ghost always has an odd number free to sit on between
+							-- any two chips. LayoutOrder is an integer, and relative
+							-- order is untouched by the doubling -- place() calls
+							-- relayout(), which renormalises the side to 1..n.
+							local slot, mx = nil, 0
+							for k, s in pairs(placed) do
+								if s == hover_side and k ~= key and not GLOBAL_KEYS[k] and not BAR_KEYS[k] then
+									local o = objects[k]
+									local ord = order[k] or 1
+									if o then o.LayoutOrder = ord * 2 end
+									if ord > mx then mx = ord end
 								end
-							elseif caret.Visible then
-								caret.Visible = false
 							end
+							slot = hover_before and ((order[hover_before] or 1) * 2 - 1) or (mx * 2 + 1)
+
+							ghost.Text = LABELS[key] or key
+							ghost.TextSize = math.clamp(math.floor(tonumber(flags[cflag("esp_text_size")]) or 13), 8, 24)
+							ghost.LayoutOrder = slot
+							if ghost.Parent ~= containers[hover_side] then
+								ghost.Parent = containers[hover_side]
+							end
+							ghost.Visible = true
 						end
 					end)()
 
