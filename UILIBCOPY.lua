@@ -7914,10 +7914,24 @@ return LPH_NO_VIRTUALIZE(function()
 							local __text = text and (tostring(text):gsub("KeyCode.", ""):gsub("UserInputType.", "")) or "none"
 
 							local kb_col = cfg.active and themes.preset.accent or themes.preset.text
-							KB_NAME_LABEL.Text = cfg.name
-							KB_NAME_LABEL.TextColor3 = kb_col
-							KB_KEY_LABEL.Text = "[" .. tostring(__text) .. "]"
-							KB_KEY_LABEL.TextColor3 = kb_col
+							-- GUARDED, exactly the way the sibling site below already
+							-- guards the same thing with `if cfg.name and kb_set_listed`.
+							--
+							-- These two labels are built only inside `if cfg.name then`
+							-- further up, and when they are absent this threw
+							-- "attempt to index nil with 'Text'" on EVERY press of a
+							-- toggle-mode bind -- once per keypress, forever. The flag
+							-- write above it had already landed, so the bind still
+							-- worked and the only thing the throw produced was console
+							-- spam. That is not harmless here: Fallen's anticheat reads
+							-- the client console, so a stack trace per keypress is the
+							-- loudest thing the menu could possibly be doing.
+							if KB_NAME_LABEL and KB_KEY_LABEL then
+								KB_NAME_LABEL.Text = cfg.name
+								KB_NAME_LABEL.TextColor3 = kb_col
+								KB_KEY_LABEL.Text = "[" .. tostring(__text) .. "]"
+								KB_KEY_LABEL.TextColor3 = kb_col
+							end
 						end
 					end
 
