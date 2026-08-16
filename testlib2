@@ -535,6 +535,13 @@ return LPH_NO_VIRTUALIZE(function()
 					if input.UserInputType == Enum.UserInputType.MouseButton1 then
 						start = input.Position
 						start_size = frame.Size
+						--// DRAGGING THE GRIP IS THE ONLY THING THAT COUNTS AS A MANUAL RESIZE.
+						--// library:panel's auto-fit used to infer it by comparing the height
+						--// against the last one it set, which meant restoring ui_positions -
+						--// Unload Config, or any config load - looked identical to a resize and
+						--// silently killed auto-fit for the rest of the session.
+						library.manual_sized = library.manual_sized or {}
+						library.manual_sized[frame] = true
 						library.active_drag = function(inp)
 							local viewport_x = camera.ViewportSize.X
 							local viewport_y = camera.ViewportSize.Y
@@ -867,7 +874,15 @@ return LPH_NO_VIRTUALIZE(function()
 						local ok2, size = pcall(function() return frame.Size end)
 						if ok then
 							local entry = { pos.X.Offset, pos.Y.Offset }
-							if ok2 then entry[3] = size.X.Offset; entry[4] = size.Y.Offset end
+							--// SIZE IS ONLY SAVED FOR PANELS THE USER ACTUALLY RESIZED.
+							--// Auto-fit drives the height of everything else, so persisting it
+							--// would freeze a panel at whatever its content happened to need
+							--// when the config was written - and restoring that later fights
+							--// the fit. A manually dragged size is a real preference; a fitted
+							--// one is a derived value and belongs nowhere near the config.
+							if ok2 and library.manual_sized and library.manual_sized[frame] then
+								entry[3] = size.X.Offset; entry[4] = size.Y.Offset
+							end
 							out[key] = entry
 						end
 					end
@@ -884,9 +899,22 @@ return LPH_NO_VIRTUALIZE(function()
 						local x, y = tonumber(pos[1]), tonumber(pos[2])
 						if x and y then pcall(function() frame.Position = dim2(0, x, 0, y) end) end
 						local w, h = tonumber(pos[3]), tonumber(pos[4])
-						if w and h then pcall(function() frame.Size = dim2(0, w, 0, h) end) end
+						if w and h then
+							--// a size in the config only ever gets there from a real grip drag
+							--// (see capture_ui_positions), so restoring one re-asserts that
+							--// preference and keeps auto-fit off this panel.
+							library.manual_sized = library.manual_sized or {}
+							library.manual_sized[frame] = true
+							pcall(function() frame.Size = dim2(0, w, 0, h) end)
+						end
 					end
 				end
+
+				--// panels whose size was NOT restored have just had their position moved and
+				--// may be showing stale geometry - re-run every auto-fit once the dust settles.
+				task.defer(function()
+					for _, fit in next, (library.panel_fits or {}) do pcall(fit) end
+				end)
 			end
 
 			function library:autoload_name()
@@ -1591,10 +1619,6 @@ return LPH_NO_VIRTUALIZE(function()
 						do
 							local CHROME_Y = 40
 							local base_h = cfg.size.Y.Offset
-							--// what WE last set. if the height ever differs from this the user
-							--// dragged the resize grip (or a saved ui_positions size was applied),
-							--// so auto-fit gets out of the way permanently - their size wins.
-							local last_set = base_h
 
 							local function content_height()
 								local tallest = 0
@@ -1612,7 +1636,8 @@ return LPH_NO_VIRTUALIZE(function()
 							end
 
 							local function fit()
-								if items.main_holder.Size.Y.Offset ~= last_set then return end
+								--// only a real grip drag turns this off, never a config restore
+								if library.manual_sized and library.manual_sized[items.main_holder] then return end
 								local h = content_height()
 								if not h or h <= 0 then return end
 								--// never shrink below the designed size, never taller than the screen
@@ -1620,9 +1645,12 @@ return LPH_NO_VIRTUALIZE(function()
 								if abs(items.main_holder.Size.Y.Offset - want) <= 1 then return end
 								local sz = items.main_holder.Size
 								items.main_holder.Size = dim2(sz.X.Scale, sz.X.Offset, 0, want)
-								last_set = want
 							end
 							items.fit = fit
+							--// registered so load_config can re-run every fit after it restores
+							--// positions - see the ui_positions setter
+							library.panel_fits = library.panel_fits or {}
+							insert(library.panel_fits, fit)
 
 							local function watch(child)
 								if child:IsA("GuiObject") then
@@ -3939,10 +3967,20 @@ return LPH_NO_VIRTUALIZE(function()
 						local enabled = cmaster()
 						local B = cfg._show
 
+						--// CHAMS DRAW FOR REAL IN THE BUILDER.
+						--//
+						--// This used to be either/or: the builder showed a flat stand-in cube
+						--// and the actual Highlight only ever ran outside it, so you were
+						--// picking colours against something that wasn't the thing. Now the
+						--// real Highlight is on whenever the chip is placed, and the cube is
+						--// demoted to a HOVER TARGET - a Highlight is not a GuiObject, so
+						--// there is nothing to mouse over without it.
+						local cham_on = enabled and
+							((B and B.chams == true) or (not B and flags[cflag("Chams")] == true))
+
 						if o.chams_box then
-							local cham_on = enabled and (B and B.chams) == true
-							o.chams_box.Visible = cham_on
-							if cham_on then
+							o.chams_box.Visible = cham_on and cfg._selected_key == "chams"
+							if o.chams_box.Visible then
 								local fc = flags[cflag("Chams_Fill_Color")]
 								if fc and fc.Color then
 									o.chams_box.BackgroundColor3 = fc.Color
@@ -3952,7 +3990,7 @@ return LPH_NO_VIRTUALIZE(function()
 							end
 						end
 						if o.chams then
-							if not B and enabled and flags[cflag("Chams")] then
+							if cham_on then
 								o.chams.Adornee = character
 								local oc = flags[cflag("Chams_Outline")];     if oc and oc.Color then o.chams.OutlineColor = oc.Color end
 								local fc = flags[cflag("Chams_Fill_Color")];  if fc and fc.Color then o.chams.FillColor    = fc.Color end
@@ -3998,10 +4036,15 @@ return LPH_NO_VIRTUALIZE(function()
 							end
 						end
 
+						--// same treatment as chams: the real bones draw in the builder, and the
+						--// box behind them is only a hover target. the individual lines are far
+						--// too thin to grab reliably.
+						local skel_on = enabled and
+							((B and B.skeleton == true) or (not B and flags[cflag("Skeleton")] == true))
+
 						if o.skel_box then
-							local skel_on = enabled and (B and B.skeleton) == true
-							o.skel_box.Visible = skel_on
-							if skel_on then
+							o.skel_box.Visible = skel_on and cfg._selected_key == "skeleton"
+							if o.skel_box.Visible then
 								local col = flags[cflag("Skeleton_Color")]
 								if col and col.Color then
 									o.skel_box.BackgroundColor3 = col.Color
@@ -4011,7 +4054,7 @@ return LPH_NO_VIRTUALIZE(function()
 							end
 						end
 						if o.skel_lines then
-							if not B and enabled and flags[cflag("Skeleton")] then
+							if skel_on then
 								local col = flags[cflag("Skeleton_Color")]; col = (col and col.Color) or rgb(255, 255, 255)
 								local th = flags[cflag("skel_thickness")] or 2
 								for i, bone in ipairs(PREVIEW_BONES) do
@@ -5603,8 +5646,13 @@ return LPH_NO_VIRTUALIZE(function()
 					local function pick_hover()
 						local o = objects
 						if o.head_dot and o.head_dot.Visible and library:hovering(o.head_dot) then return o.head_dot, "head_dot" end
-						if o.chams_box and o.chams_box.Visible and library:hovering(o.chams_box) then return o.chams_box, "chams" end
-						if o.skel_box and o.skel_box.Visible and library:hovering(o.skel_box) then return o.skel_box, "skeleton" end
+						--// NOT gated on .Visible any more. Those two boxes now only become
+						--// visible WHILE hovered, so testing visibility here would be a
+						--// deadlock - never visible, therefore never hovered, therefore never
+						--// visible. Hit-test them whenever the chip is placed instead.
+						local S = cfg._show
+						if o.chams_box and S and S.chams and library:hovering(o.chams_box) then return o.chams_box, "chams" end
+						if o.skel_box and S and S.skeleton and library:hovering(o.skel_box) then return o.skel_box, "skeleton" end
 						if o.ammo_bg and o.ammo_bg.Parent == o.holder and library:hovering(o.ammo_bg) then return o.ammo_bg, "ammo" end
 						if o.healthbar_holder and o.healthbar_holder.Parent == o.holder and library:hovering(o.healthbar_holder) then return o.healthbar_holder, "healthbar" end
 						for key, side in pairs(placed) do
