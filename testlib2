@@ -2011,10 +2011,12 @@ return LPH_NO_VIRTUALIZE(function()
 					range = options.range or 250,
 					visible = options.visible ~= false,
 					items = {},
-					--// two contact colours. upsert picks between them off `looking`, or a
-					--// consumer can hand it an explicit `color` and override both.
+					--// the DOT is always dot_color. only the FACING LINE swaps to look_color,
+					--// so a contact turning toward you reads as a colour change on the needle
+					--// rather than the blip moving or resizing.
 					dot_color  = options.dot_color  or themes.preset.accent,
 					look_color = options.look_color or rgb(255, 60, 60),
+					line_length = options.line_length or 10,
 				}
 
 				local items = cfg.items; do
@@ -2186,23 +2188,46 @@ return LPH_NO_VIRTUALIZE(function()
 				end
 
 				local function create_entry(key)
-					local entry = {looking = false, custom = false}
+					local entry = {looking = false, custom = false, facing = false}
 					--// deliberately NOT registered in the accent theme channel: these are
 					--// individually coloured, and update_theme repaints anything still sitting
 					--// on the old preset - which would silently drag idle contacts back to
 					--// accent the first time someone touched the accent picker. bind the Dot
 					--// Color picker's "Use Accent" instead if you want them to follow.
+					--// 6px and fully round - the same circle as the centre dot. nhack drew
+					--// contacts as 4px near-squares (CornerRadius 0,1), which read as a
+					--// different kind of thing to the marker at the middle.
 					entry.dot = library:create("Frame", {
 						Parent = items.bounds,
 						Name = "\0",
 						AnchorPoint = vec2(0.5, 0.5),
 						Position = dim2(0.5, 0, 0.5, 0),
-						Size = dim2(0, 4, 0, 4),
+						Size = dim2(0, 6, 0, 6),
 						ZIndex = 4,
 						BorderSizePixel = 0,
 						BackgroundColor3 = cfg.dot_color
 					})
-					library:create("UICorner", {Parent = entry.dot, Name = "\0", CornerRadius = dim(0, 1)})
+					library:create("UICorner", {Parent = entry.dot, Name = "\0", CornerRadius = dim(1, 0)})
+
+					--// FACING NEEDLE. a sibling of the dot, not a child: a child would inherit
+					--// the dot's 6px box as its own coordinate space, so the line could never
+					--// be longer than the circle.
+					--//
+					--// AnchorPoint (0.5, 1) puts the pivot at the BOTTOM of the bar, and
+					--// GuiObject.Rotation turns about the anchor - so it hangs upward out of
+					--// the contact and Rotation 0 points straight up the radar.
+					entry.line = library:create("Frame", {
+						Parent = items.bounds,
+						Name = "\0",
+						AnchorPoint = vec2(0.5, 1),
+						Position = dim2(0.5, 0, 0.5, 0),
+						Size = dim2(0, 1, 0, cfg.line_length),
+						ZIndex = 3,
+						BorderSizePixel = 0,
+						Visible = false,
+						BackgroundColor3 = cfg.dot_color
+					})
+
 					cfg.entries[key] = entry
 					return entry
 				end
@@ -2213,7 +2238,10 @@ return LPH_NO_VIRTUALIZE(function()
 				local function repaint()
 					for _, entry in next, cfg.entries do
 						if entry.dot and entry.dot.Parent and not entry.custom then
-							entry.dot.BackgroundColor3 = entry.looking and cfg.look_color or cfg.dot_color
+							entry.dot.BackgroundColor3 = cfg.dot_color
+						end
+						if entry.line and entry.line.Parent then
+							entry.line.BackgroundColor3 = entry.looking and cfg.look_color or cfg.dot_color
 						end
 					end
 				end
@@ -2251,47 +2279,74 @@ return LPH_NO_VIRTUALIZE(function()
 					repaint()
 				end
 
+				function cfg.set_line_length(n)
+					cfg.line_length = math.clamp(tonumber(n) or cfg.line_length, 0, 40)
+					for _, entry in next, cfg.entries do
+						if entry.line and entry.line.Parent then
+							entry.line.Size = dim2(0, 1, 0, cfg.line_length)
+						end
+					end
+				end
+
 				--// data = {position = Vector2 (PIXELS inside the bounds rect), size = number,
 				--//         visible = boolean, transparency = number,
-				--//         looking = boolean,   -- facing you -> uses look_color
-				--//         color = Color3}      -- explicit, wins over `looking`
+				--//         facing  = number,    -- DEGREES clockwise from up. shows the needle.
+				--//                              -- pass false to hide it.
+				--//         looking = boolean,   -- facing you -> needle uses look_color
+				--//         color   = Color3}    -- explicit DOT colour, never the needle
 				--//
-				--// `looking` is STICKY: omit it and the contact keeps whatever it had, so a
-				--// per-frame position update doesn't have to re-state the aim check.
+				--// `looking` and `facing` are both STICKY: omit either and the contact keeps
+				--// what it had, so a per-frame position update needn't re-state the aim check.
 				function cfg.upsert(key, data)
 					local entry = cfg.entries[key] or create_entry(key)
-					local dot = entry.dot
+					local dot, line = entry.dot, entry.line
 
 					local position = data and data.position
 					local size = data and data.size
 					local visible = data and data.visible
 					local transparency = data and data.transparency
 					local color = data and data.color
+					local facing = data and data.facing
 
 					if typeof(position) == "Vector2" then
+						--// the needle is a sibling, so it has to be moved alongside the dot
 						dot.Position = dim2(0, position.X, 0, position.Y)
+						line.Position = dim2(0, position.X, 0, position.Y)
 					end
 					if typeof(size) == "number" then
 						dot.Size = dim2(0, size, 0, size)
 					end
 					if typeof(transparency) == "number" then
 						dot.BackgroundTransparency = transparency
+						line.BackgroundTransparency = transparency
 					else
 						dot.BackgroundTransparency = 0
+						line.BackgroundTransparency = 0
 					end
 
+					if typeof(facing) == "number" then
+						line.Rotation = facing
+						entry.facing = true
+					elseif facing == false then
+						entry.facing = false
+					end
+
+					--// the DOT never takes look_color - only the needle does
 					if typeof(color) == "Color3" then
 						entry.custom = true
 						dot.BackgroundColor3 = color
 					else
 						entry.custom = false
-						if data and data.looking ~= nil then
-							entry.looking = data.looking and true or false
-						end
-						dot.BackgroundColor3 = entry.looking and cfg.look_color or cfg.dot_color
+						dot.BackgroundColor3 = cfg.dot_color
 					end
 
+					if data and data.looking ~= nil then
+						entry.looking = data.looking and true or false
+					end
+					line.BackgroundColor3 = entry.looking and cfg.look_color or cfg.dot_color
+
 					dot.Visible = visible ~= false
+					line.Visible = dot.Visible and entry.facing == true and cfg.line_length > 0
 					return entry
 				end
 
@@ -2300,12 +2355,14 @@ return LPH_NO_VIRTUALIZE(function()
 					if not entry then return end
 					cfg.entries[key] = nil
 					pcall(function() entry.dot:Destroy() end)
+					pcall(function() entry.line:Destroy() end)
 				end
 
 				function cfg.clear()
 					for key, entry in next, cfg.entries do
 						cfg.entries[key] = nil
 						pcall(function() entry.dot:Destroy() end)
+						pcall(function() entry.line:Destroy() end)
 					end
 				end
 
@@ -2931,6 +2988,10 @@ return LPH_NO_VIRTUALIZE(function()
 						radar_opts:label({name = "Looking At You"})
 							:colorpicker({name = "Looking", flag = "radar_look_color", color = rgb(255, 60, 60),
 								callback = function(c) radar.set_look_color(c) end})
+						radar_opts:slider({name = "Facing Line", flag = "radar_line_len", min = 0, max = 24,
+							default = 10, interval = 1, suffix = "px",
+							tooltip = "length of the needle showing which way a contact faces - 0 hides it",
+							callback = function(v) radar.set_line_length(v) end})
 						access_section:toggle({name = "Aero Snap", flag = "aero_snap", default = false})
 						access_section:label({name = "Click Sound Style"})
 						local ui_click_custom
