@@ -2017,11 +2017,15 @@ return LPH_NO_VIRTUALIZE(function()
 					dot_color  = options.dot_color  or themes.preset.accent,
 					look_color = options.look_color or rgb(255, 60, 60),
 					line_length = options.line_length or 10,
-					--// FRACTIONAL on purpose. a Frame's offset is a float, so 0.5 renders as a
-					--// hairline - genuinely thinner than the 1px minimum you'd get treating
-					--// this as an integer. rotated frames get antialiased, which is what made
-					--// a 1px needle read as roughly two.
-					line_thickness = options.line_thickness or 0.5,
+					--// 1px IS THE FLOOR FOR A ROTATING LINE. sub-pixel widths are allowed (the
+					--// offset is a float) and look great standing still, but they have no clean
+					--// pixel coverage - so as the angle sweeps, a hairline shimmers, breaks
+					--// into dashes and drops out entirely at some angles. Spinning is the exact
+					--// case that exposes it. To make a needle READ thinner without that, drop
+					--// line_transparency instead: a 1px line at 0.35 looks lighter and stays
+					--// rock solid through a full rotation.
+					line_thickness = options.line_thickness or 1,
+					line_transparency = options.line_transparency or 0.25,
 				}
 
 				local items = cfg.items; do
@@ -2329,6 +2333,15 @@ return LPH_NO_VIRTUALIZE(function()
 					for _, entry in next, cfg.entries do place_line(entry) end
 				end
 
+				function cfg.set_line_transparency(n)
+					cfg.line_transparency = math.clamp(tonumber(n) or cfg.line_transparency, 0, 0.95)
+					for _, entry in next, cfg.entries do
+						if entry.line and entry.line.Parent then
+							entry.line.BackgroundTransparency = cfg.line_transparency
+						end
+					end
+				end
+
 				--// data = {position = Vector2 (PIXELS inside the bounds rect), size = number,
 				--//         visible = boolean, transparency = number,
 				--//         facing  = number,    -- DEGREES clockwise from up. shows the needle.
@@ -2361,7 +2374,9 @@ return LPH_NO_VIRTUALIZE(function()
 						line.BackgroundTransparency = transparency
 					else
 						dot.BackgroundTransparency = 0
-						line.BackgroundTransparency = 0
+						--// the needle rides its own baseline alpha - that is the knob for
+						--// making it read lighter than the dot without going sub-pixel
+						line.BackgroundTransparency = cfg.line_transparency
 					end
 
 					if typeof(facing) == "number" then
@@ -3036,9 +3051,13 @@ return LPH_NO_VIRTUALIZE(function()
 							tooltip = "length of the needle showing which way a contact faces - 0 hides it",
 							callback = function(v) radar.set_line_length(v) end})
 						radar_opts:slider({name = "Line Width", flag = "radar_line_width", min = 0.25, max = 4,
-							default = 0.5, interval = 0.25, suffix = "px",
-							tooltip = "sub-pixel values are allowed - 0.5 is a hairline",
+							default = 1, interval = 0.25, suffix = "px",
+							tooltip = "below 1px a rotating line shimmers and breaks up - use Line Fade to thin it instead",
 							callback = function(v) radar.set_line_thickness(v) end})
+						radar_opts:slider({name = "Line Fade", flag = "radar_line_fade", min = 0, max = 90,
+							default = 25, interval = 5, suffix = "%",
+							tooltip = "makes the needle read lighter without going sub-pixel",
+							callback = function(v) radar.set_line_transparency(v / 100) end})
 						access_section:toggle({name = "Aero Snap", flag = "aero_snap", default = false})
 						access_section:label({name = "Click Sound Style"})
 						local ui_click_custom
