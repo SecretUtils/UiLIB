@@ -2511,6 +2511,8 @@ return LPH_NO_VIRTUALIZE(function()
 					library:log("Initializing " .. tostring((properties and properties.name) or "menu") .. "...", "INFO")
 					library:log("Loaded successfully!", "SUCCESS")
 
+				window.watermark_widget = watermark
+
 				return setmetatable(window, library)
 			end
 
