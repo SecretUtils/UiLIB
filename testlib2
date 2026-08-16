@@ -2757,6 +2757,12 @@ return LPH_NO_VIRTUALIZE(function()
 
 					local watermark = library:watermark({default = os.date('Fem.Hook |  - %b %d %Y - %H:%M:%S')})
 
+					--// built up-front like the watermark so the Accessibility toggle below has
+					--// something to drive. starts hidden - it is inert until a consumer feeds
+					--// it contacts via radar.upsert, so showing an empty grid by default would
+					--// just be clutter.
+					local radar = library:radar({name = "Radar", visible = false})
+
 					local wm_game_name
 					task.spawn(function()
 						pcall(function()
@@ -2866,6 +2872,12 @@ return LPH_NO_VIRTUALIZE(function()
 							default = {"User", "Version", "FPS", "Ping", "Date", "Time"}})
 						wm_opts:label({name = "Custom Watermark Text"})
 						wm_opts:textbox({name = "Watermark Text", flag = "watermark_text", default = "fem.hook", placeholder = "watermark text", callback = function(text) end})
+						local radar_tgl = access_section:toggle({name = "Radar", flag = "radar", default = false,
+							tooltip = "draggable radar widget - a consumer script feeds it contacts",
+							callback = function(bool) radar.set_visible(bool) end})
+						local radar_opts = radar_tgl:plus({name = "Radar Options"})
+						radar_opts:slider({name = "Range", flag = "radar_range", min = 50, max = 1000, default = 250,
+							interval = 10, suffix = "st", callback = function(v) radar.set_range(v) end})
 						access_section:toggle({name = "Aero Snap", flag = "aero_snap", default = false})
 						access_section:label({name = "Click Sound Style"})
 						local ui_click_custom
@@ -3269,6 +3281,10 @@ return LPH_NO_VIRTUALIZE(function()
 					library:log("Loaded successfully!", "SUCCESS")
 
 				window.watermark_widget = watermark
+				--// _widget suffix on both: window's metatable is `library`, so a plain
+				--// window.radar would resolve through __index to the library:radar
+				--// CONSTRUCTOR rather than this instance.
+				window.radar_widget = radar
 
 				return setmetatable(window, library)
 			end
