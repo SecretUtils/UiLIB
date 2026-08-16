@@ -111,8 +111,14 @@ return LPH_NO_VIRTUALIZE(function()
 				["outline"] = hex("#0A0A0A"),
 				["inline"] = hex("#2D2D2D"),
 				["accent"] = hex("#6078BE"),
-				["high_contrast"] = hex("#141414"),
-				["low_contrast"] = hex("#1E1E1E"),
+				--// these MUST match the hardcoded contrast gradient literals used all over the
+				--// lib -> rgbkey(0, rgb(41,41,55)), rgbkey(1, rgb(35,35,47)).
+				--// the Contrast pickers fire update_theme("contrast", {low, high}) while the
+				--// Style panel is still being built, and that only repaints gradients that
+				--// already exist. if these differ from the literals, everything created before
+				--// that line ends up one colour and everything after keeps the other.
+				["high_contrast"] = hex("#23232F"),
+				["low_contrast"] = hex("#292937"),
 				["text"] = hex("#B4B4B4"),
 				["text_outline"] = rgb(0, 0, 0),
 				["glow"] = hex("#6078BE"),
@@ -941,6 +947,52 @@ return LPH_NO_VIRTUALIZE(function()
 				return ins
 			end
 
+			--// every glow in the lib goes through here so the Glow Size slider can drive
+			--// all of them at once. `spread` is how far the slice bleeds past its parent.
+			library.glows = {}
+			library.glow_size = 20
+			function library:apply_glow(parent, options)
+				options = options or {}
+				local spread = options.spread or library.glow_size
+
+				local glow = library:create("ImageLabel", {
+					Parent = parent,
+					Name = "",
+					ImageColor3 = themes.preset.glow,
+					ScaleType = Enum.ScaleType.Slice,
+					BorderColor3 = rgb(0, 0, 0),
+					BackgroundColor3 = rgb(255, 255, 255),
+					Visible = true,
+					Image = "http://www.roblox.com/asset/?id=18245826428",
+					BackgroundTransparency = 1,
+					ImageTransparency = options.transparency or 0.8,
+					Position = dim2(0, -spread, 0, -spread),
+					Size = dim2(1, spread * 2, 1, spread * 2),
+					ZIndex = options.zindex or 0,
+					BorderSizePixel = 0,
+					SliceCenter = rect(vec2(21, 21), vec2(79, 79))
+				}) library:apply_theme(glow, "glow", "ImageColor3")
+
+				--// `manual` glows are placed by their owner (see the watermark, which cannot
+				--// host a scale-sized child) and must NOT be rewritten to the scale form
+				--// below - those register a hook instead.
+				if not options.manual then insert(library.glows, glow) end
+				return glow
+			end
+
+			library.glow_hooks = {}
+			function library:set_glow_size(pixels)
+				pixels = math.clamp(tonumber(pixels) or 20, 0, 80)
+				library.glow_size = pixels
+				for _, glow in next, library.glows do
+					if glow and glow.Parent then
+						glow.Position = dim2(0, -pixels, 0, -pixels)
+						glow.Size = dim2(1, pixels * 2, 1, pixels * 2)
+					end
+				end
+				for _, hook in next, library.glow_hooks do pcall(hook, pixels) end
+			end
+
 			local tooltip_sgui = library:create("ScreenGui", {
 				Enabled = true,
 				Parent = gethui(),
@@ -1247,7 +1299,7 @@ return LPH_NO_VIRTUALIZE(function()
 							ZIndex = 2,
 							BorderSizePixel = 0,
 							SliceCenter = rect(vec2(21, 21), vec2(79, 79))
-						}) library:apply_theme(items.glow, "glow", "ImageColor3")
+						}) library:apply_theme(items.glow, "glow", "ImageColor3") insert(library.glows, items.glow)
 
 						items.button = library:create("TextButton", {
 							Parent = library.dock_holder,
@@ -1700,6 +1752,7 @@ return LPH_NO_VIRTUALIZE(function()
 					dock_outline.Position = dim2(0, dock_outline.AbsolutePosition.X, 0, dock_outline.AbsolutePosition.Y);
 					dock_outline.AnchorPoint = vec2(0, 0);
 					library:draggify(dock_outline, "dock");
+					library:apply_glow(dock_outline, {zindex = 0});
 
 					local dock_inline = library:create("Frame", {
 						Parent = dock_outline,
@@ -1757,6 +1810,21 @@ return LPH_NO_VIRTUALIZE(function()
 						FillDirection = Enum.FillDirection.Horizontal,
 						SortOrder = Enum.SortOrder.LayoutOrder
 					})
+
+					--// the dock was pinned at 187x39 while five 25px icons only need 157x39,
+					--// so it always carried dead space on the right. size it off the layout's
+					--// real content instead, which also means it tracks the icon count.
+					--// +12 x = 4 nesting inset + 4/4 button_holder padding
+					--// +14 y = 4 nesting inset + 6 top / 4 bottom padding
+					do
+						local function fit_dock()
+							local content = UIListLayout.AbsoluteContentSize
+							if content.X <= 0 then return end
+							dock_outline.Size = dim2(0, content.X + 12, 0, content.Y + 14)
+						end
+						library:connection(UIListLayout:GetPropertyChangedSignal("AbsoluteContentSize"), fit_dock)
+						task.defer(fit_dock)
+					end
 
 					local UIPadding = library:create("UIPadding", {
 						Parent = button_holder,
@@ -2133,6 +2201,10 @@ return LPH_NO_VIRTUALIZE(function()
 					:colorpicker({name = "Glow", color = themes.preset.glow, callback = function(color, alpha)
 						library:update_theme("glow", color)
 					end, flag = "Glow"})
+					section:slider({name = "Glow Size", flag = "glow_size", min = 0, max = 60, default = 20,
+						interval = 1, suffix = "px", callback = function(v)
+							library:set_glow_size(v)
+						end})
 					local access_section, other_section = column:multi_section({names = {"Accessibility", "Other"}})
 
 						access_section:label({name = "UI Bind"})
@@ -2538,6 +2610,24 @@ return LPH_NO_VIRTUALIZE(function()
 				}) library:apply_theme(watermark_outline, "outline", "BackgroundColor3")
 				library:draggify(watermark_outline, "watermark")
 
+				--// the glow CANNOT be a child of watermark_outline: that frame is
+				--// AutomaticSize.X and a (1, spread*2) child would feed its own width back in
+				--// and run the bar to the screen edge. so it lives in sgui as a sibling and
+				--// tracks the bar's absolute rect instead.
+				cfg.glow = library:apply_glow(sgui, {zindex = 0, manual = true})
+				local function sync_watermark_glow()
+					local sp = library.glow_size
+					local p, s = watermark_outline.AbsolutePosition, watermark_outline.AbsoluteSize
+					cfg.glow.Position = dim_offset(p.X - sp, p.Y - sp)
+					cfg.glow.Size = dim2(0, s.X + sp * 2, 0, s.Y + sp * 2)
+					cfg.glow.Visible = watermark_outline.Visible
+				end
+				library:connection(watermark_outline:GetPropertyChangedSignal("AbsoluteSize"), sync_watermark_glow)
+				library:connection(watermark_outline:GetPropertyChangedSignal("AbsolutePosition"), sync_watermark_glow)
+				library:connection(watermark_outline:GetPropertyChangedSignal("Visible"), sync_watermark_glow)
+				insert(library.glow_hooks, sync_watermark_glow)
+				sync_watermark_glow()
+
 				--// AutomaticSize.X means the width isn't measured until layout has run, so
 				--// park it top-right on the next frame. anchor stays (0,0) so draggify and
 				--// the saved ui_positions restore both use plain top-left offsets.
@@ -2626,12 +2716,16 @@ return LPH_NO_VIRTUALIZE(function()
 					LineJoinMode = Enum.LineJoinMode.Miter
 				})
 
+				--// NOTE: these liners must sit on watermark_outline with a NEGATIVE offset
+				--// (1, -4), not on watermark_background at (1, 0). the outline is
+				--// AutomaticSize.X; a full-width scale child feeds the measured width back
+				--// into the auto-size and the bar runs out to the viewport edge.
 				local accent = library:create("Frame", {
-					Parent = watermark_background,
+					Parent = watermark_outline,
 					Name = "",
-					Position = dim2(0, 0, 0, 0),
+					Position = dim2(0, 2, 0, 2),
 					BorderColor3 = rgb(0, 0, 0),
-					Size = dim2(1, 0, 0, 2),
+					Size = dim2(1, -4, 0, 2),
 					ZIndex = 3,
 					BorderSizePixel = 0,
 					BackgroundColor3 = themes.preset.accent
@@ -2650,11 +2744,11 @@ return LPH_NO_VIRTUALIZE(function()
 				})
 
 				local dark_liner = library:create("Frame", {
-					Parent = watermark_background,
+					Parent = watermark_outline,
 					Name = "",
-					Position = dim2(0, 0, 0, 2),
+					Position = dim2(0, 2, 0, 4),
 					BorderColor3 = rgb(0, 0, 0),
-					Size = dim2(1, 0, 0, 1),
+					Size = dim2(1, -4, 0, 1),
 					ZIndex = 3,
 					BorderSizePixel = 0,
 					BackgroundColor3 = themes.preset.low_contrast
@@ -6974,7 +7068,7 @@ return LPH_NO_VIRTUALIZE(function()
 					ZIndex = 0,
 					BorderSizePixel = 0,
 					SliceCenter = rect(vec2(21, 21), vec2(79, 79))
-				}) library:apply_theme(glow, "glow", "ImageColor3")
+				}) library:apply_theme(glow, "glow", "ImageColor3") insert(library.glows, glow)
 
 				local window_inline = library:create("Frame", {
 					Parent = window,
