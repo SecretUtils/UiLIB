@@ -2529,15 +2529,26 @@ return LPH_NO_VIRTUALIZE(function()
 					Parent = sgui,
 					Name = "",
 					BorderColor3 = rgb(0, 0, 0),
-					AnchorPoint = vec2(1, 1),
-					Position = dim2(1, -20, 0, 20),
+					AnchorPoint = vec2(0, 0),
+					Position = dim2(1, -260, 0, 20),
 					Size = dim2(0, 0, 0, 24),
 					BorderSizePixel = 0,
 					AutomaticSize = Enum.AutomaticSize.X,
 					BackgroundColor3 = themes.preset.outline
 				}) library:apply_theme(watermark_outline, "outline", "BackgroundColor3")
-				watermark_outline.Position = dim_offset(watermark_outline.AbsolutePosition.X, watermark_outline.AbsolutePosition.Y)
 				library:draggify(watermark_outline, "watermark")
+
+				--// AutomaticSize.X means the width isn't measured until layout has run, so
+				--// park it top-right on the next frame. anchor stays (0,0) so draggify and
+				--// the saved ui_positions restore both use plain top-left offsets.
+				task.spawn(function()
+					task.wait()
+					local saved = flags["ui_positions"]
+					if type(saved) == "table" and saved["watermark"] then return end
+					local w = watermark_outline.AbsoluteSize.X
+					local vp = camera.ViewportSize
+					watermark_outline.Position = dim_offset(max(0, vp.X - w - 20), 20)
+				end)
 
 				local watermark_inline = library:create("Frame", {
 					Parent = watermark_outline,
@@ -2989,14 +3000,12 @@ return LPH_NO_VIRTUALIZE(function()
 							o.distance.Text = v .. suffix
 						end
 
-						if o.ammo_text then
-							local on = flags[cflag("Ammo_Counter")] == true
-							o.ammo_text.Visible = on
-							if on then
-								local tc = flags[cflag("Ammo_Counter_Color")]
-								if tc and tc.Color then o.ammo_text.TextColor3 = tc.Color end
-								o.ammo_text.Text = "21 / 30"
-							end
+						--// "Ammo_Counter" already drives the placeable `ammo_counter` chip, which
+						--// is the layout-managed one. ammo_text is a second label welded under
+						--// the bar reading the SAME flag - that is the duplicate "21 / 30".
+						--// the chip stays authoritative; this one is kept but never shown.
+						if o.ammo_text and o.ammo_text.Visible then
+							o.ammo_text.Visible = false
 						end
 
 						if o.holder then
@@ -5125,15 +5134,86 @@ return LPH_NO_VIRTUALIZE(function()
 						BackgroundColor3 = rgb(255, 255, 255)
 					})
 
-					local bar = library:create("Frame", {
+					--// nhack-style topbar: outline / inline / gradient body, with an accent
+					--// liner along the top edge and a dark liner tucked under it.
+					local bar_outline = library:create("Frame", {
 						Parent = root,
+						Name = "\0",
+						BorderColor3 = rgb(0, 0, 0),
+						BorderSizePixel = 0,
+						Position = dim2(0, 0, 0, 0),
+						Size = dim2(1, 0, 0, 22),
+						ZIndex = 4,
+						BackgroundColor3 = themes.preset.outline
+					}) library:apply_theme(bar_outline, "outline", "BackgroundColor3")
+
+					local bar_inline = library:create("Frame", {
+						Parent = bar_outline,
+						Name = "\0",
+						Position = dim2(0, 1, 0, 1),
+						Size = dim2(1, -2, 1, -2),
+						BorderColor3 = rgb(0, 0, 0),
+						BorderSizePixel = 0,
+						ZIndex = 4,
+						BackgroundColor3 = themes.preset.inline
+					}) library:apply_theme(bar_inline, "inline", "BackgroundColor3")
+
+					local bar_background = library:create("Frame", {
+						Parent = bar_inline,
+						Name = "\0",
+						Position = dim2(0, 1, 0, 1),
+						Size = dim2(1, -2, 1, -2),
+						BorderColor3 = rgb(0, 0, 0),
+						BorderSizePixel = 0,
+						ZIndex = 4,
+						BackgroundColor3 = rgb(255, 255, 255)
+					})
+
+					local bar_gradient = library:create("UIGradient", {
+						Parent = bar_background,
+						Name = "\0",
+						Rotation = 90,
+						Color = rgbseq{rgbkey(0, rgb(41, 41, 55)), rgbkey(1, rgb(35, 35, 47))}
+					}) library:apply_theme(bar_gradient, "contrast", "Color")
+
+					local bar_accent = library:create("Frame", {
+						Parent = bar_background,
+						Name = "\0",
+						Position = dim2(0, 0, 0, 0),
+						Size = dim2(1, 0, 0, 2),
+						BorderColor3 = rgb(0, 0, 0),
+						BorderSizePixel = 0,
+						ZIndex = 5,
+						BackgroundColor3 = themes.preset.accent
+					}) library:apply_theme(bar_accent, "accent", "BackgroundColor3")
+
+					library:create("UIGradient", {
+						Parent = bar_accent,
+						Name = "\0",
+						Rotation = 90,
+						Color = rgbseq{rgbkey(0, rgb(255, 255, 255)), rgbkey(1, rgb(167, 167, 167))}
+					})
+
+					local bar_liner = library:create("Frame", {
+						Parent = bar_background,
+						Name = "\0",
+						Position = dim2(0, 0, 0, 2),
+						Size = dim2(1, 0, 0, 1),
+						BorderColor3 = rgb(0, 0, 0),
+						BorderSizePixel = 0,
+						ZIndex = 5,
+						BackgroundColor3 = themes.preset.low_contrast
+					}) library:apply_theme(bar_liner, "low_contrast", "BackgroundColor3")
+
+					local bar = library:create("Frame", {
+						Parent = bar_background,
 						Name = "\0",
 						BackgroundTransparency = 1,
 						BorderColor3 = rgb(0, 0, 0),
 						BorderSizePixel = 0,
-						Position = dim2(0, 0, 0, 0),
-						Size = dim2(1, 0, 0, 16),
-						ZIndex = 5,
+						Position = dim2(0, 0, 0, 2),
+						Size = dim2(1, 0, 1, -2),
+						ZIndex = 6,
 						BackgroundColor3 = rgb(255, 255, 255)
 					})
 
@@ -5147,7 +5227,8 @@ return LPH_NO_VIRTUALIZE(function()
 
 					library:create("UIPadding", {
 						Parent = bar,
-						PaddingLeft = dim(0, 4)
+						PaddingLeft = dim(0, 6),
+						PaddingRight = dim(0, 6)
 					})
 
 					local pages = library:create("Frame", {
@@ -5156,8 +5237,8 @@ return LPH_NO_VIRTUALIZE(function()
 						BackgroundTransparency = 1,
 						BorderColor3 = rgb(0, 0, 0),
 						BorderSizePixel = 0,
-						Position = dim2(0, 0, 0, 20),
-						Size = dim2(1, 0, 1, -20),
+						Position = dim2(0, 0, 0, 26),
+						Size = dim2(1, 0, 1, -26),
 						BackgroundColor3 = rgb(255, 255, 255)
 					})
 
