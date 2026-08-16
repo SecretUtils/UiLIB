@@ -924,11 +924,35 @@ return LPH_NO_VIRTUALIZE(function()
 			end
 
 			function library:update_theme(theme, color)
-				for _, property in next, themes.utility[theme] do
+				local channel = themes.utility[theme]
+				if not channel then return end
 
-					for m, object in next, property do
-						if object[_] == themes.preset[theme] or object.ClassName == "UIGradient" then
-							object[_] = color
+				local old = themes.preset[theme]
+
+				for property, objects in next, channel do
+					--// PRUNE AS WE GO.
+					--//
+					--// apply_theme only ever appended, and nothing removed an entry when its
+					--// instance was destroyed - so every notification, drag ghost, snow flake
+					--// and torn-down ESP chip stayed registered forever. The lists grew for the
+					--// life of the session and every theme change walked the corpses.
+					--//
+					--// Iterating BACKWARDS is what makes removal safe: dropping index i does
+					--// not shift anything still to be visited.
+					for i = #objects, 1, -1 do
+						local object = objects[i]
+						local alive, parent = pcall(function() return object.Parent end)
+
+						if not alive or parent == nil then
+							remove(objects, i)
+						else
+							--// only repaint what is still sitting on the OLD preset (or is a
+							--// gradient, which is replaced wholesale). anything a consumer set
+							--// to a custom colour keeps it.
+							local got, current = pcall(function() return object[property] end)
+							if got and (current == old or object.ClassName == "UIGradient") then
+								pcall(function() object[property] = color end)
+							end
 						end
 					end
 				end
@@ -1044,8 +1068,29 @@ return LPH_NO_VIRTUALIZE(function()
 			function library:create(instance, options)
 				local ins = Instance.new(instance)
 
-				for prop, value in next, options do
-					ins[prop] = value
+				--// FAST PATH, then a per-property retry.
+				--//
+				--// Properties are assigned raw, so ONE member the running client does not have
+				--// - a newer UIStroke field, a property Roblox renamed - threw out of here and
+				--// killed the entire menu build. That is how a cosmetic detail turns into a
+				--// blank screen on an older executor.
+				--//
+				--// The bulk loop still runs unguarded (this is called thousands of times during
+				--// a build, and a pcall per property would be felt). Only on failure does it
+				--// retry one at a time, so everything valid still lands and only the unsupported
+				--// member is dropped.
+				local ok, err = pcall(function()
+					for prop, value in next, options do
+						ins[prop] = value
+					end
+				end)
+				if not ok then
+					for prop, value in next, options do
+						pcall(function() ins[prop] = value end)
+					end
+					pcall(function()
+						library:log(("create(%s): %s"):format(tostring(instance), tostring(err)), "WARN")
+					end)
 				end
 
 				if instance == "TextLabel" or instance == "TextButton" or instance == "TextBox" then
@@ -2266,11 +2311,32 @@ return LPH_NO_VIRTUALIZE(function()
 
 					local a = rad(entry.angle or 0)
 					local dx, dy = sin(a), -cos(a)
+					local px, py = entry.px or 0, entry.py or 0
+
+					--// ROTATED CHILDREN IGNORE ClipsDescendants.
+					--//
+					--// items.bounds clips everything else - the dots included - but a frame with
+					--// a non-zero Rotation is exempt from an ancestor's clip in Roblox, so the
+					--// needles ran straight off the widget and over the game.
+					--//
+					--// Nothing can be done about that at the clip end, so the LENGTH is capped
+					--// here: walk the ray from the contact along the facing direction and stop
+					--// at whichever wall of the rect it reaches first. A contact standing at the
+					--// edge facing outward simply gets no needle.
+					local b = items.bounds.AbsoluteSize
+					local tx = (dx > 1e-6) and (b.X - px) / dx or (dx < -1e-6) and -px / dx or math.huge
+					local ty = (dy > 1e-6) and (b.Y - py) / dy or (dy < -1e-6) and -py / dy or math.huge
+					len = min(len, tx, ty)
+					if len < 1 then
+						line.Visible = false
+						return
+					end
+
 					line.Size = dim2(0, cfg.line_thickness, 0, len)
 					line.Rotation = entry.angle or 0
 					line.Position = dim2(
-						0, (entry.px or 0) + dx * len * 0.5,
-						0, (entry.py or 0) + dy * len * 0.5)
+						0, px + dx * len * 0.5,
+						0, py + dy * len * 0.5)
 					line.Visible = true
 				end
 
@@ -11725,6 +11791,73 @@ return LPH_NO_VIRTUALIZE(function()
 
 				return setmetatable(cfg, library)
 			end
+
+	--// ELEMENT ERROR ISOLATION.
+	--//
+	--// Every constructor builds instances from a consumer-supplied options table, and any
+	--// of them can throw on bad input, a missing flag, or a property the running client
+	--// does not have. Nothing sat between them and the consumer script, so ONE bad element
+	--// aborted the entire menu build: half a UI, a stack trace, and no indication of which
+	--// element was responsible.
+	--//
+	--// Wrapping them here - after every one is defined - makes a failure local. It names
+	--// the constructor in the Output console and hands back an inert stub; the rest of the
+	--// menu builds normally.
+	--//
+	--// STRUCTURAL constructors are deliberately NOT wrapped. If window / panel / tab /
+	--// subtab / column / section fails the menu is meaningless anyway, and swallowing it
+	--// would bury the real error under a cascade of child failures. multi_section is out
+	--// for a different reason: it returns MULTIPLE values (unpack of its sections), and a
+	--// wrapper capturing a single result would silently truncate it to the first section.
+	do
+		local noop = function() end
+		local dead_mt
+
+		--// A dead element answers the calls a live one would, and any library call made ON
+		--// it yields another dead element - so an entire subtree under a failure collapses
+		--// quietly instead of erroring once per child, and never builds orphan instances.
+		local function dead_element()
+			return setmetatable({
+				_dead = true,
+				set = noop, set_visible = noop, set_element_visible = noop,
+				set_open = noop, refresh_options = noop, add = noop, clear = noop,
+				attach_subgroup = noop, set_caption = noop, set_image = noop,
+				set_model = noop, set_preview_visible = noop, focus = noop,
+			}, dead_mt)
+		end
+
+		dead_mt = {__index = function(_, key)
+			if type(library[key]) ~= "function" then return nil end
+			return function() return dead_element() end
+		end}
+
+		for _, name in next, {
+			"toggle", "slider", "dropdown", "colorpicker", "keybind", "textbox",
+			"button", "button_holder", "label", "list", "console", "command_bar",
+			"model_grid", "playerlist", "esp_preview", "separator", "sectionbar",
+			"collapsible", "embedded_box", "indent_group", "subgroup", "plus",
+			"radar", "indicator", "notification", "tool_tip",
+		} do
+			local original = library[name]
+			if type(original) == "function" then
+				library[name] = function(self, ...)
+					--// already inside a failed subtree - skip without logging again, or one
+					--// broken section would spam a line per descendant
+					if type(self) == "table" and rawget(self, "_dead") then
+						return dead_element()
+					end
+
+					local ok, result = pcall(original, self, ...)
+					if ok then return result end
+
+					pcall(function()
+						library:log(("element '%s' failed: %s"):format(name, tostring(result)), "ERROR")
+					end)
+					return dead_element()
+				end
+			end
+		end
+	end
 
 	do
 		local genv = (getgenv and getgenv()) or _G
