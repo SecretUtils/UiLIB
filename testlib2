@@ -421,6 +421,67 @@ return LPH_NO_VIRTUALIZE(function()
 				return hover_instance;
 			end
 
+			--// REUSABLE HOVER TINT.
+			--//
+			--// hoverify fades an accent PANEL in behind an element. this tweens named
+			--// PROPERTIES on any set of objects instead, so it drives text colour, gradient
+			--// tints, stroke colour, transparency - anything a tween can reach.
+			--//
+			--//   trigger   the thing you mouse over
+			--//   targets   list of { object, property, hovered_value, resting_value }
+			--//             values are literals OR functions returning one.
+			--//             resting_value is OPTIONAL - omit it and the value held at the
+			--//             moment the pointer arrived is restored.
+			--//
+			--// Pass resting_value as a FUNCTION for anything whose idle value depends on
+			--// state - an active tab rests on accent, an inactive one on text. Capturing it
+			--// on enter would restore the stale colour if the state changed mid-hover, which
+			--// is exactly what happens when you click a tab and then move the mouse off it.
+			--//
+			--// Timing comes from library:tween_info, so the Animation Speed / Style /
+			--// Direction controls drive these too.
+			function library:hover_tint(trigger, targets, options)
+				options = options or {}
+				local hovered = false
+
+				local function resolve(v)
+					if type(v) == "function" then
+						local ok, out = pcall(v)
+						if ok then return out end
+						return nil
+					end
+					return v
+				end
+
+				local function apply(on)
+					local info = library:tween_info(options.time or 0.15)
+					for _, e in next, targets do
+						local obj, prop = e[1], e[2]
+						if obj and prop and obj.Parent then
+							local goal
+							if on then
+								if e._rest == nil then e._rest = obj[prop] end
+								goal = resolve(e[3])
+							else
+								goal = resolve(e[4])
+								if goal == nil then goal = e._rest end
+								e._rest = nil
+							end
+							if goal ~= nil then
+								library:tween(obj, {[prop] = goal}, info)
+							end
+						end
+					end
+				end
+
+				library:connection(trigger.MouseEnter, function() hovered = true;  apply(true)  end)
+				library:connection(trigger.MouseLeave, function() hovered = false; apply(false) end)
+
+				--// re-run the CURRENT state. callers whose resting value just changed (see
+				--// open_tab) call this so the element settles on the right colour.
+				return function() apply(hovered) end
+			end
+
 			function library:hovering(Object)
 				if type(Object) == "table" then
 					local Pass = false;
@@ -2006,8 +2067,14 @@ return LPH_NO_VIRTUALIZE(function()
 					});
 
 					library:apply_theme(dock_outline, "outline", "BackgroundColor3");
-					dock_outline.Position = dim2(0, dock_outline.AbsolutePosition.X, 0, dock_outline.AbsolutePosition.Y);
+					--// draggify needs a pure-offset Position with a (0,0) anchor, so the scale
+					--// form above has to be converted. do NOT round-trip it through
+					--// AbsolutePosition: sgui is IgnoreGuiInset, and AbsolutePosition on such a
+					--// gui reads 36px LOWER than the Position that produced it. at y=56 that
+					--// silently became 20 and still showed; at y=10 it becomes -26 and the dock
+					--// sits off the top of the screen. compute the centre from the viewport.
 					dock_outline.AnchorPoint = vec2(0, 0);
+					dock_outline.Position = dim_offset(floor((camera.ViewportSize.X - dock_outline.Size.X.Offset) / 2), 10);
 					library:draggify(dock_outline, "dock");
 					library:apply_glow(dock_outline, {zindex = 0});
 
@@ -2074,10 +2141,19 @@ return LPH_NO_VIRTUALIZE(function()
 					--// +12 x = 4 nesting inset + 4/4 button_holder padding
 					--// +14 y = 4 nesting inset + 6 top / 4 bottom padding
 					do
+						--// resizing the dock off its own content would leave it off-centre, so
+						--// re-centre on every fit - but only while the position is still the one
+						--// WE set. the moment it differs the user has dragged it, and their
+						--// placement has to stick.
+						local dock_x = dock_outline.Position.X.Offset
 						local function fit_dock()
 							local content = UIListLayout.AbsoluteContentSize
 							if content.X <= 0 then return end
-							dock_outline.Size = dim2(0, content.X + 12, 0, content.Y + 14)
+							local w = content.X + 12
+							dock_outline.Size = dim2(0, w, 0, content.Y + 14)
+							if dock_outline.Position.X.Offset ~= dock_x then return end
+							dock_x = floor((camera.ViewportSize.X - w) / 2)
+							dock_outline.Position = dim_offset(dock_x, dock_outline.Position.Y.Offset)
 						end
 						library:connection(UIListLayout:GetPropertyChangedSignal("AbsoluteContentSize"), fit_dock)
 						task.defer(fit_dock)
@@ -4500,10 +4576,16 @@ return LPH_NO_VIRTUALIZE(function()
 
 					local dragging, hover_side, hover_before, hover_palette = nil, nil, nil, false
 					local last_hpw, last_ammow
+					local drag_origin
 
-					local drag_ghost = nil
+					--// THE CURSOR CHIP. only visible while the resolver has NO slot armed - the
+					--// moment one is, this fades out and the in-place ghost takes over, so you
+					--// are never looking at two copies of the same chip.
+					local drag_ghost, drag_ghost_stroke = nil, nil
+					local ghost_pos, ghost_shown = nil, true
 					local function make_drag_ghost(label)
 						if drag_ghost then pcall(function() drag_ghost:Destroy() end) end
+						ghost_pos, ghost_shown = nil, true
 						drag_ghost = library:create("TextLabel", {
 							Parent = sgui; Name = "\0"; FontFace = library.font; Active = false;
 							Text = label or ""; TextColor3 = TXT; BackgroundColor3 = ACCENT;
@@ -4513,10 +4595,25 @@ return LPH_NO_VIRTUALIZE(function()
 						})
 						library:apply_theme(drag_ghost, "accent", "BackgroundColor3")
 						library:create("UIPadding", {Parent = drag_ghost; PaddingLeft = dim(0, 5); PaddingRight = dim(0, 5)})
-						library:apply_theme(library:create("UIStroke", {Parent = drag_ghost; Color = ACCENT; Thickness = 1; LineJoinMode = Enum.LineJoinMode.Miter}), "accent", "Color")
+						drag_ghost_stroke = library:create("UIStroke", {Parent = drag_ghost;
+							Color = ACCENT; Thickness = 1; LineJoinMode = Enum.LineJoinMode.Miter})
+						library:apply_theme(drag_ghost_stroke, "accent", "Color")
 					end
 					local function kill_drag_ghost()
 						if drag_ghost then pcall(function() drag_ghost:Destroy() end); drag_ghost = nil end
+						drag_ghost_stroke, ghost_pos = nil, nil
+					end
+					--// cross-fade rather than a hard swap, so leaving a drop zone reads as the
+					--// chip flying back to the cursor instead of blinking between two places.
+					local function show_mouse_ghost(on)
+						if not drag_ghost or on == ghost_shown then return end
+						ghost_shown = on
+						local i = library:tween_info(0.12)
+						library:tween(drag_ghost, {BackgroundTransparency = on and 0.3 or 1,
+							TextTransparency = on and 0 or 1}, i)
+						if drag_ghost_stroke then
+							library:tween(drag_ghost_stroke, {Transparency = on and 0 or 1}, i)
+						end
 					end
 
 					local layout_ctx = "player"
@@ -4677,32 +4774,231 @@ return LPH_NO_VIRTUALIZE(function()
 							if input.UserInputType == Enum.UserInputType.MouseButton1
 								or input.UserInputType == Enum.UserInputType.Touch then
 								dragging = key; hover_side = nil; hover_before = nil; hover_palette = false
+								drag_origin = vec2(mouse.X, mouse.Y)
 								make_drag_ghost(label)
 							end
 						end)
 					end
 
+					-- DROP ZONES.
+					--
+					-- These used to be Active frames that armed themselves from MouseEnter, and
+					-- that is exactly why dropping a chip was fiddly. A zone sits at ZIndex 2 --
+					-- UNDER the box (3), the containers (3), every placed chip (6) and the model
+					-- itself -- so the moment the pointer crossed anything that LOOKS like a
+					-- target, the enter never fired, hover_side stayed nil and the drop was
+					-- silently thrown away. Being Active, they were also eating the click-drag
+					-- that spins the preview.
+					--
+					-- So they are pure HIT RECTS now: inert, never drawn.
+					local zones = {}
 					local function make_zone(anchor, pos, size, side)
-						local z = library:create("Frame", {
-							Parent = holder; Name = "\0"; BackgroundTransparency = 1; Active = true;
-							AnchorPoint = anchor; Position = pos; Size = size; BorderSizePixel = 0; ZIndex = 2;
+						zones[side] = library:create("Frame", {
+							Parent = holder; Name = "\0"; Active = false;
+							BackgroundTransparency = 1; BackgroundColor3 = rgb(255, 255, 255);
+							AnchorPoint = anchor; Position = pos; Size = size;
+							BorderSizePixel = 0; ZIndex = 2;
 						})
-						library:connection(z.MouseEnter, function() if dragging then hover_side = side; hover_before = nil end end)
-						library:connection(z.MouseLeave, function() if dragging and hover_side == side then hover_side = nil end end)
 					end
 					make_zone(vec2(0.5, 1), dim2(0.5, 0, 0, 0), dim2(2, 24, 0, 55), "top")
 					make_zone(vec2(0.5, 0), dim2(0.5, 0, 1, 0), dim2(2, 24, 0, 55), "bottom")
 					make_zone(vec2(1, 0.5), dim2(0, 0, 0.5, 0), dim2(0, 55, 2, 24), "left")
 					make_zone(vec2(0, 0.5), dim2(1, 0, 0.5, 0), dim2(0, 55, 2, 24), "right")
 
-					library:connection(tray_wrap.MouseEnter, function() if dragging then hover_palette = true end end)
-					library:connection(tray_wrap.MouseLeave, function() hover_palette = false end)
+					-- everything the drag needs to know, recomputed each frame from the pointer.
+					-- wrapped in its own frame so the helpers cost esp_preview one register
+					-- rather than five - this function is already long and luau caps a frame at 200.
+					local update_drop_target = (function()
+						local function point_in(o)
+							local p, s = o.AbsolutePosition, o.AbsoluteSize
+							return mouse.X >= p.X and mouse.X <= p.X + s.X
+								and mouse.Y >= p.Y and mouse.Y <= p.Y + s.Y
+						end
+
+						-- outside every zone the drop still has to land SOMEWHERE, so the pointer
+						-- is measured against the box centre and the dominant axis wins.
+						-- normalised by the box's own half extents, or a wide box reads as "left"
+						-- for a pointer that's plainly above it.
+						local function nearest_side()
+							local p, s = holder.AbsolutePosition, holder.AbsoluteSize
+							local nx = (mouse.X - (p.X + s.X * 0.5)) / math.max(s.X * 0.5, 1)
+							local ny = (mouse.Y - (p.Y + s.Y * 0.5)) / math.max(s.Y * 0.5, 1)
+							if math.abs(nx) > math.abs(ny) then
+								return (nx < 0) and "left" or "right"
+							end
+							return (ny < 0) and "top" or "bottom"
+						end
+
+						-- every side stacks vertically (the top container just hugs its bottom
+						-- edge), so the insertion point is the topmost chip the pointer is still
+						-- above. nil = append.
+						local function stack_scan(side, key)
+							local before, before_mid
+							for k, s in pairs(placed) do
+								if s == side and k ~= key and not GLOBAL_KEYS[k] and not BAR_KEYS[k] then
+									local o = objects[k]
+									if o and o.Visible then
+										local mid = o.AbsolutePosition.Y + o.AbsoluteSize.Y * 0.5
+										if mouse.Y < mid and (not before_mid or mid < before_mid) then
+											before, before_mid = k, mid
+										end
+									end
+								end
+							end
+							return before
+						end
+
+						-- THE PREVIEW IS A REAL CHIP IN THE REAL CONTAINER.
+						--
+						-- Same font, same size, same padding, parented to the side it would land
+						-- on with a LayoutOrder that drops it into the exact slot -- so the chips
+						-- already there shift to make room and you are looking at the finished
+						-- layout before you let go. An accent stroke rings it so it reads as a
+						-- placeholder rather than something already placed.
+						local ghost = library:create("TextLabel", {
+							Parent = library.cache; Name = "\0"; Visible = false;
+							FontFace = library.font; Text = ""; TextSize = 13;
+							TextColor3 = TXT; BackgroundColor3 = ACCENT;
+							BackgroundTransparency = 0.45; TextTransparency = 0.15;
+							BorderSizePixel = 0; ZIndex = 7;
+							AutomaticSize = Enum.AutomaticSize.XY; Size = dim2(0, 0, 0, 0);
+							TextXAlignment = Enum.TextXAlignment.Center;
+						})
+						library:apply_theme(ghost, "accent", "BackgroundColor3")
+						library:create("UIPadding", {Parent = ghost;
+							PaddingLeft = dim(0, 3); PaddingRight = dim(0, 3)})
+						do
+							local st = library:create("UIStroke", {Parent = ghost; Thickness = 1;
+								Color = ACCENT; LineJoinMode = Enum.LineJoinMode.Miter})
+							library:apply_theme(st, "accent", "Color")
+						end
+
+						-- a bar doesn't stack, it runs down an edge, so it previews as the strip
+						-- it would become -- at its real thickness
+						local bar_ghost = library:create("Frame", {
+							Parent = holder; Name = "\0"; Visible = false;
+							BackgroundColor3 = ACCENT; BackgroundTransparency = 0.4;
+							BorderSizePixel = 0; ZIndex = 7;
+						})
+						library:apply_theme(bar_ghost, "accent", "BackgroundColor3")
+
+						-- the chip being dragged is hidden from its old slot while it's in
+						-- flight, or the stack shows it twice and the preview stops being a
+						-- preview of the result
+						local hidden_src
+						local function clear()
+							if ghost.Parent ~= library.cache then
+								ghost.Visible = false
+								ghost.Parent = library.cache
+							end
+							if bar_ghost.Visible then bar_ghost.Visible = false end
+							if hidden_src then
+								if hidden_src.Parent then hidden_src.Visible = true end
+								hidden_src = nil
+							end
+						end
+
+						return function()
+							local key = dragging
+
+							if not key then
+								hover_side, hover_before, hover_palette = nil, nil, false
+							elseif library:hovering(tray_wrap) then
+								hover_palette, hover_side, hover_before = true, nil, nil
+							else
+								hover_palette = false
+								if GLOBAL_KEYS[key] then
+									-- box / chams / skeleton / head dot have no side to pick, so
+									-- arming a zone would be a lie
+									hover_side, hover_before = nil, nil
+								else
+									local side
+									for _, s in ipairs(SIDES) do
+										if zones[s] and point_in(zones[s]) then side = s break end
+									end
+									hover_side = side or nearest_side()
+									hover_before = nil
+									if not BAR_KEYS[key] then
+										hover_before = stack_scan(hover_side, key)
+									end
+								end
+							end
+
+							--// no slot armed -> the cursor chip is the preview again
+							show_mouse_ghost(hover_side == nil)
+							if not hover_side then clear() return end
+
+							if BAR_KEYS[key] then
+								if ghost.Parent ~= library.cache then
+									ghost.Visible = false; ghost.Parent = library.cache
+								end
+								local wf = (key == "healthbar") and "hp_bar_width" or "ammo_bar_width"
+								local T = math.clamp(tonumber(flags[cflag(wf)]) or 3, 1, 8)
+								if hover_side == "top" then
+									bar_ghost.AnchorPoint = vec2(0, 1)
+									bar_ghost.Position = dim2(0, 1, 0, -3); bar_ghost.Size = dim2(1, -2, 0, T)
+								elseif hover_side == "bottom" then
+									bar_ghost.AnchorPoint = vec2(0, 0)
+									bar_ghost.Position = dim2(0, 1, 1, 3);  bar_ghost.Size = dim2(1, -2, 0, T)
+								elseif hover_side == "left" then
+									bar_ghost.AnchorPoint = vec2(1, 0)
+									bar_ghost.Position = dim2(0, -3, 0, 1); bar_ghost.Size = dim2(0, T, 1, -2)
+								else
+									bar_ghost.AnchorPoint = vec2(0, 0)
+									bar_ghost.Position = dim2(1, 3, 0, 1);  bar_ghost.Size = dim2(0, T, 1, -2)
+								end
+								bar_ghost.Visible = true
+								return
+							end
+							bar_ghost.Visible = false
+
+							-- take the dragged chip out of its old slot
+							if not hidden_src then
+								local src = placed[key] and objects[key]
+								if src then hidden_src = src; src.Visible = false end
+							end
+
+							-- LAYOUT ORDERS ARE DOUBLED while a drag is live, so the ghost always
+							-- has an odd number free to sit on between any two chips. LayoutOrder
+							-- is an integer, and relative order is untouched by the doubling --
+							-- place() calls relayout(), which renormalises the side to 1..n.
+							local slot, mx = nil, 0
+							for k, s in pairs(placed) do
+								if s == hover_side and k ~= key and not GLOBAL_KEYS[k] and not BAR_KEYS[k] then
+									local o = objects[k]
+									local ord = order[k] or 1
+									if o then o.LayoutOrder = ord * 2 end
+									if ord > mx then mx = ord end
+								end
+							end
+							slot = hover_before and ((order[hover_before] or 1) * 2 - 1) or (mx * 2 + 1)
+
+							ghost.Text = LABELS[key] or key
+							ghost.TextSize = math.clamp(math.floor(tonumber(flags[cflag("esp_text_size")]) or 13), 8, 24)
+							ghost.LayoutOrder = slot
+							if ghost.Parent ~= containers[hover_side] then
+								ghost.Parent = containers[hover_side]
+							end
+							ghost.Visible = true
+						end
+					end)()
 
 					library:connection(uis.InputEnded, function(input)
 						if not dragging then return end
 						if input.UserInputType ~= Enum.UserInputType.MouseButton1
 							and input.UserInputType ~= Enum.UserInputType.Touch then return end
 						local key = dragging; dragging = nil
+
+						-- A CLICK IS NOT A DRAG. The resolver always has a side armed while
+						-- something is in flight, so without this, tapping a chip that's already
+						-- placed re-drops it and can nudge its order under the pointer.
+						if drag_origin
+							and math.abs(mouse.X - drag_origin.X) + math.abs(mouse.Y - drag_origin.Y) < 5 then
+							hover_side = nil; hover_before = nil; hover_palette = false
+							kill_drag_ghost()
+							return
+						end
+
 						if BAR_KEYS[key] then
 							if library:hovering(tray_wrap) then
 								if placed[key] then unplace(key) end
@@ -4727,11 +5023,9 @@ return LPH_NO_VIRTUALIZE(function()
 								normalize(o)
 								add_hover(o)
 								bind_drag(o, c.key, c.label)
-								library:connection(o.MouseEnter, function()
-									if dragging and dragging ~= c.key and placed[c.key] then
-										hover_side = placed[c.key]; hover_before = c.key
-									end
-								end)
+								-- no MouseEnter ordering hook here any more: the insertion point
+								-- is geometric now, so it also resolves in the GAPS between chips
+								-- instead of only when the pointer is dead on top of one
 							end
 
 							local chip = library:create("TextLabel", {
@@ -4805,15 +5099,21 @@ return LPH_NO_VIRTUALIZE(function()
 					cfg._builder_on = true
 					cfg._char_ctx_on = true
 
-					library:connection(run.RenderStepped, function()
+					library:connection(run.RenderStepped, function(dt)
 						if drag_ghost then
 							if dragging then
 								local m = uis:GetMouseLocation()
-								drag_ghost.Position = dim2(0, m.X + 12, 0, m.Y - 6)
+								local target = vec2(m.X + 12, m.Y - 6)
+								--// EASED toward the cursor, not snapped. that lag is what sells
+								--// the hand-off: when you leave a drop zone the chip visibly
+								--// flies back to the mouse instead of teleporting onto it.
+								ghost_pos = ghost_pos and ghost_pos:Lerp(target, clamp((dt or 1/60) * 18, 0, 1)) or target
+								drag_ghost.Position = dim2(0, ghost_pos.X, 0, ghost_pos.Y)
 							else
 								kill_drag_ghost()
 							end
 						end
+						update_drop_target()
 						cfg._builder_on = builder_visible()
 						if not cfg._builder_on then
 							if sel_overlay.Visible then sel_overlay.Visible = false end
@@ -5500,6 +5800,23 @@ return LPH_NO_VIRTUALIZE(function()
 						SortOrder = Enum.SortOrder.LayoutOrder
 					})
 
+					--// hover feedback. the resting values are PROVIDERS, not captured constants:
+					--// open_tab writes TextColor3 directly on both the outgoing and incoming
+					--// tab, so a value captured on enter would be stale the moment you click.
+					local function tab_active()
+						return library.current_tab ~= nil and library.current_tab[1] == background
+					end
+					cfg.refresh_hover = library:hover_tint(tab_holder, {
+						{text, "TextColor3",
+							function() return themes.preset.accent end,
+							function() return tab_active() and themes.preset.accent or themes.preset.text end},
+						--// the body is white and its UIGradient supplies the contrast, so a
+						--// gradient tint is just a nudge of this multiplier toward accent.
+						{background, "BackgroundColor3",
+							function() return rgb(255, 255, 255):Lerp(themes.preset.accent, 0.22) end,
+							rgb(255, 255, 255)},
+					})
+
 				function cfg.open_tab()
 					if library.current_tab and library.current_tab[1] ~= background then
 						local button = library.current_tab[1]
@@ -5522,6 +5839,10 @@ return LPH_NO_VIRTUALIZE(function()
 					button:FindFirstChildOfClass("TextLabel").TextColor3 = themes.preset.accent
 
 					library.current_tab[2].Visible = true
+
+					--// open_tab just overwrote TextColor3 by hand; if the pointer is still on
+					--// this tab, settle it back onto the hovered value.
+					if cfg.refresh_hover then cfg.refresh_hover() end
 
 					if library.current_element_open and library.current_element_open ~= cfg then
 						library.current_element_open.set_visible(false)
@@ -5721,10 +6042,22 @@ return LPH_NO_VIRTUALIZE(function()
 					SortOrder = Enum.SortOrder.LayoutOrder
 				})
 
+				--// the subtab captions are bare text on a transparent button, so hover gets a
+				--// faint accent wash behind them as well as the colour lift.
+				button.BackgroundColor3 = themes.preset.accent
+				library:apply_theme(button, "accent", "BackgroundColor3")
+				cfg.refresh_hover = library:hover_tint(button, {
+					{button, "TextColor3",
+						function() return themes.preset.accent end,
+						function() return cfg.enabled and themes.preset.accent or themes.preset.text end},
+					{button, "BackgroundTransparency", 0.88, 1},
+				})
+
 				function cfg.set_open(bool)
 					cfg.enabled = bool
 					section_holder.Visible = bool
 					button.TextColor3 = bool and themes.preset.accent or themes.preset.text
+					if cfg.refresh_hover then cfg.refresh_hover() end
 				end
 
 				function cfg.open_tab()
