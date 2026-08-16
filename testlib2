@@ -110,18 +110,18 @@ return LPH_NO_VIRTUALIZE(function()
 			preset = {
 				["outline"] = hex("#0A0A0A"),
 				["inline"] = hex("#2D2D2D"),
-				["accent"] = hex("#6078BE"),
+				["accent"] = hex("#C68CFF"),
 				--// these MUST match the hardcoded contrast gradient literals used all over the
-				--// lib -> rgbkey(0, rgb(41,41,55)), rgbkey(1, rgb(35,35,47)).
+				--// lib -> rgbkey(0, rgb(24, 24, 32)), rgbkey(1, rgb(19, 19, 26)).
 				--// the Contrast pickers fire update_theme("contrast", {low, high}) while the
 				--// Style panel is still being built, and that only repaints gradients that
 				--// already exist. if these differ from the literals, everything created before
 				--// that line ends up one colour and everything after keeps the other.
-				["high_contrast"] = hex("#23232F"),
-				["low_contrast"] = hex("#292937"),
+				["high_contrast"] = hex("#13131A"),
+				["low_contrast"] = hex("#181820"),
 				["text"] = hex("#B4B4B4"),
 				["text_outline"] = rgb(0, 0, 0),
-				["glow"] = hex("#6078BE"),
+				["glow"] = hex("#C68CFF"),
 			},
 
 			utility = {
@@ -1230,7 +1230,7 @@ return LPH_NO_VIRTUALIZE(function()
 					local UIGradient = library:create("UIGradient", {
 						Parent = watermark_background,
 						Name = "",
-						Color = rgbseq{rgbkey(0, rgb(41, 41, 55)), rgbkey(1, rgb(35, 35, 47))}
+						Color = rgbseq{rgbkey(0, rgb(24, 24, 32)), rgbkey(1, rgb(19, 19, 26))}
 					}); library:apply_theme(UIGradient, "contrast", "Color")
 
 					local text = library:create("TextLabel", {
@@ -1380,8 +1380,8 @@ return LPH_NO_VIRTUALIZE(function()
 							Name = "",
 							Rotation = 90,
 							Color = rgbseq{
-							rgbkey(0, rgb(41, 41, 55)),
-							rgbkey(1, rgb(35, 35, 47))
+							rgbkey(0, rgb(24, 24, 32)),
+							rgbkey(1, rgb(19, 19, 26))
 						}
 						})
 
@@ -1455,8 +1455,8 @@ return LPH_NO_VIRTUALIZE(function()
 							Name = "",
 							Rotation = 90,
 							Color = rgbseq{
-								rgbkey(0, rgb(41, 41, 55)),
-								rgbkey(1, rgb(35, 35, 47))
+								rgbkey(0, rgb(24, 24, 32)),
+								rgbkey(1, rgb(19, 19, 26))
 							}
 						})
 
@@ -1470,6 +1470,66 @@ return LPH_NO_VIRTUALIZE(function()
 							PaddingRight = dim(0, 5),
 							PaddingLeft = dim(0, 5)
 						})
+
+						--// PANEL AUTO-FIT.
+						--//
+						--// a panel ships a FIXED `size`, but every section / multi_section inside
+						--// it is AutomaticSize.Y - so once a section holds more elements than the
+						--// panel was drawn for, it just grows straight through the bottom border
+						--// instead of being contained. measure what the content actually needs and
+						--// size the panel to it.
+						--//
+						--// vertical chrome between main_holder and the content area is 40px:
+						--//   2 window_inline + 2 window_holder + 4 window_holder bottom padding
+						--//   + 18 title strip + 2 outline + 2 inline + 5/5 holder padding
+						do
+							local CHROME_Y = 40
+							local base_h = cfg.size.Y.Offset
+							--// what WE last set. if the height ever differs from this the user
+							--// dragged the resize grip (or a saved ui_positions size was applied),
+							--// so auto-fit gets out of the way permanently - their size wins.
+							local last_set = base_h
+
+							local function content_height()
+								local tallest = 0
+								for _, child in next, items.holder:GetChildren() do
+									if child:IsA("GuiObject") and child.Visible then
+										--// a child sized by SCALE is a fill layout, not content -
+										--// the main window's tab pages are dim2(1,0,1,-22). measuring
+										--// one and resizing its parent feeds the height back into
+										--// itself forever, so bail rather than auto-fit that panel.
+										if child.Size.Y.Scale ~= 0 then return nil end
+										tallest = max(tallest, child.AbsoluteSize.Y)
+									end
+								end
+								return tallest
+							end
+
+							local function fit()
+								if items.main_holder.Size.Y.Offset ~= last_set then return end
+								local h = content_height()
+								if not h or h <= 0 then return end
+								--// never shrink below the designed size, never taller than the screen
+								local want = clamp(h + CHROME_Y, base_h, camera.ViewportSize.Y - 20)
+								if abs(items.main_holder.Size.Y.Offset - want) <= 1 then return end
+								local sz = items.main_holder.Size
+								items.main_holder.Size = dim2(sz.X.Scale, sz.X.Offset, 0, want)
+								last_set = want
+							end
+							items.fit = fit
+
+							local function watch(child)
+								if child:IsA("GuiObject") then
+									library:connection(child:GetPropertyChangedSignal("AbsoluteSize"), fit)
+								end
+							end
+							for _, child in next, items.holder:GetChildren() do watch(child) end
+							library:connection(items.holder.ChildAdded, function(child)
+								watch(child)
+								task.defer(fit)
+							end)
+							task.defer(fit)
+						end
 
 						items.glow = library:create("ImageLabel", {
 							Parent = items.main_holder,
@@ -1526,8 +1586,8 @@ return LPH_NO_VIRTUALIZE(function()
 							Name = "",
 							Rotation = 90,
 							Color = rgbseq{
-								rgbkey(0, rgb(35, 35, 47)),
-								rgbkey(1, rgb(41, 41, 55))
+								rgbkey(0, rgb(19, 19, 26)),
+								rgbkey(1, rgb(24, 24, 32))
 							}
 						}) library:apply_theme(UIGradient, "contrast", "Color")
 
@@ -1937,7 +1997,9 @@ return LPH_NO_VIRTUALIZE(function()
 						Visible = true,
 						BorderColor3 = rgb(0, 0, 0),
 						AnchorPoint = vec2(0.5, 0),
-						Position = dim2(0.5, 0, 0, 56),
+						--// 10, not 56: the panel row now starts at y = 60 (LAY.top), and a dock
+						--// at 56 is 39 tall, so it would sit straight on top of them.
+						Position = dim2(0.5, 0, 0, 10),
 						Size = dim2(0, 187, 0, 39),
 						BorderSizePixel = 0,
 						BackgroundColor3 = themes.preset.outline
@@ -2035,8 +2097,8 @@ return LPH_NO_VIRTUALIZE(function()
 						Name = "",
 						Rotation = 90,
 						Color = rgbseq{
-							rgbkey(0, rgb(41, 41, 55)),
-							rgbkey(1, rgb(35, 35, 47))
+							rgbkey(0, rgb(24, 24, 32)),
+							rgbkey(1, rgb(19, 19, 26))
 						}
 					}) library:apply_theme(UIGradient, "contrast", "Color")
 
@@ -2196,11 +2258,36 @@ return LPH_NO_VIRTUALIZE(function()
 						}
 					end
 
+					--// DEFAULT PANEL LAYOUT.
+					--//
+					--// every panel used to chain its position off the PREVIOUS panel's
+					--// AbsolutePosition, so the whole arrangement hung off main_window being
+					--// centred - and AbsolutePosition is only correct once that panel has been
+					--// laid out, which is why the columns drifted by a few px each. worse, on a
+					--// viewport narrower than the row the left column walked off screen.
+					--//
+					--// lay the four columns out from the VIEWPORT instead: centred as a group,
+					--// clamped so nothing starts off-screen, every panel an independent constant.
+					local LAY = {}
+					do
+						local GAP = 6
+						local W_LIST, W_MAIN, W_STYLE, W_CFG = 529, 604, 394, 324
+						local row = W_LIST + W_MAIN + W_STYLE + W_CFG + GAP * 3
+						local left = max(8, floor((camera.ViewportSize.X - row) / 2))
+
+						LAY.gap   = GAP
+						LAY.top   = 60
+						LAY.list  = left
+						LAY.main  = LAY.list  + W_LIST  + GAP
+						LAY.style = LAY.main  + W_MAIN  + GAP
+						LAY.cfg   = LAY.style + W_STYLE + GAP
+					end
+
 					local main_window = library:panel({
 						name = properties and properties.name or "Fem.Hook | ",
 						pos_key = "MainWindow",
 						size = dim2(0, 604, 0, 628),
-						position = dim2(0, (camera.ViewportSize.X / 2) - 302 - 96, 0, (camera.ViewportSize.Y / 2) - 421 - 12),
+						position = dim2(0, LAY.main, 0, LAY.top),
 						top_drag = true,
 						image = library:image("main.png", "rbxassetid://98823308062942"),
 					})
@@ -2287,8 +2374,8 @@ return LPH_NO_VIRTUALIZE(function()
 						Parent = background,
 						Rotation = 90,
 						Color = rgbseq{
-							rgbkey(0, rgb(41, 41, 55)),
-							rgbkey(1, rgb(35, 35, 47))
+							rgbkey(0, rgb(24, 24, 32)),
+							rgbkey(1, rgb(19, 19, 26))
 						}
 					})
 
@@ -2301,7 +2388,7 @@ return LPH_NO_VIRTUALIZE(function()
 						name = "Style",
 						anchor_point = vec2(0, 0),
 						size = dim2(0, 394, 0, 464),
-						position = dim2(0, main_window.items.main_holder.AbsolutePosition.X + main_window.items.main_holder.AbsoluteSize.X + 2, 0, main_window.items.main_holder.AbsolutePosition.Y),
+						position = dim2(0, LAY.style, 0, LAY.top),
 						image = library:image("style.png", "rbxassetid://115194686863276"),
 					})
 					register_icon(style, "style.png", "style2.png", "rbxassetid://115194686863276")
@@ -2510,7 +2597,7 @@ return LPH_NO_VIRTUALIZE(function()
 					local holder = library:panel({
 						name = "Configurations",
 						size = dim2(0, 324, 0, 410),
-						position = dim2(0, items.main_holder.AbsolutePosition.X + items.main_holder.AbsoluteSize.X + 2, 0, items.main_holder.AbsolutePosition.Y),
+						position = dim2(0, LAY.cfg, 0, LAY.top),
 						image = library:image("configurations.png", "rbxassetid://105199726008012"),
 					})
 					register_icon(holder, "configurations.png", "configs2.png", "rbxassetid://105199726008012")
@@ -2756,7 +2843,10 @@ return LPH_NO_VIRTUALIZE(function()
 							anchor_point = vec2(0, 0),
 							size = dim2(0, 330, 0, 348),
 							top_drag = true,
-							position = dim2(0, style.items.main_holder.AbsolutePosition.X, 0, style.items.main_holder.AbsolutePosition.Y + style.items.main_holder.AbsoluteSize.Y + 2),
+							--// under CONFIGURATIONS, not under Style. Style is the one panel that
+							--// reliably grows past its designed height once auto-fit runs, so
+							--// anything parked beneath it ends up overlapped.
+							position = dim2(0, LAY.cfg, 0, LAY.top + 410 + LAY.gap),
 							image = library:image("output.png", "rbxassetid://77684377836328"),
 						})
 						register_icon(holder, "output.png", "esp_preview2.png", "rbxassetid://77684377836328")
@@ -2771,7 +2861,7 @@ return LPH_NO_VIRTUALIZE(function()
 						name = "Playerlist",
 						anchor_point = vec2(0, 0),
 						size = dim2(0, 529, 0, 445),
-						position = dim2(0, main_window.items.main_holder.AbsolutePosition.X - 531, 0, main_window.items.main_holder.AbsolutePosition.Y),
+						position = dim2(0, LAY.list, 0, LAY.top),
 						image = library:image("playerlist.png", "rbxassetid://107070078834415"),
 					})
 					register_icon(holder, "playerlist.png", "playerlist2.png", "rbxassetid://107070078834415")
@@ -2789,7 +2879,7 @@ return LPH_NO_VIRTUALIZE(function()
 						name = "Output",
 						anchor_point = vec2(0, 0),
 						size = dim2(0, 529, 0, 324),
-						position = dim2(0, main_window.items.main_holder.AbsolutePosition.X - 531, 0, main_window.items.main_holder.AbsolutePosition.Y + 447),
+						position = dim2(0, LAY.list, 0, LAY.top + 445 + LAY.gap),
 						image = library:image("output.png", "rbxassetid://77684377836328"),
 					})
 					register_icon(holder, "output.png", "output2.png", "rbxassetid://77684377836328")
@@ -2906,8 +2996,8 @@ return LPH_NO_VIRTUALIZE(function()
 					Name = "",
 					Rotation = 90,
 					Color = rgbseq{
-						rgbkey(0, rgb(41, 41, 55)),
-						rgbkey(1, rgb(35, 35, 47))
+						rgbkey(0, rgb(24, 24, 32)),
+						rgbkey(1, rgb(19, 19, 26))
 					}
 				}) library:apply_theme(UIGradient, "contrast", "Color")
 
@@ -4963,7 +5053,7 @@ return LPH_NO_VIRTUALIZE(function()
 					do
 						local g = library:create("UIGradient", {
 							Parent = vp_body; Rotation = 90;
-							Color = rgbseq{rgbkey(0, rgb(41, 41, 55)), rgbkey(1, rgb(35, 35, 47))};
+							Color = rgbseq{rgbkey(0, rgb(24, 24, 32)), rgbkey(1, rgb(19, 19, 26))};
 						}) library:apply_theme(g, "contrast", "Color")
 					end
 					items.viewportframe.Parent = vp_body
@@ -5360,7 +5450,7 @@ return LPH_NO_VIRTUALIZE(function()
 					local UIGradient = library:create("UIGradient", {
 						Parent = background,
 						Rotation = 90,
-						Color = rgbseq{rgbkey(0, rgb(41, 41, 55)), rgbkey(1, rgb(35, 35, 47))}
+						Color = rgbseq{rgbkey(0, rgb(24, 24, 32)), rgbkey(1, rgb(19, 19, 26))}
 					}) library:apply_theme(UIGradient, "contrast", "Color")
 
 					local text = library:create("TextLabel", {
@@ -5509,7 +5599,7 @@ return LPH_NO_VIRTUALIZE(function()
 						Parent = bar_background,
 						Name = "\0",
 						Rotation = 90,
-						Color = rgbseq{rgbkey(0, rgb(41, 41, 55)), rgbkey(1, rgb(35, 35, 47))}
+						Color = rgbseq{rgbkey(0, rgb(24, 24, 32)), rgbkey(1, rgb(19, 19, 26))}
 					}) library:apply_theme(bar_gradient, "contrast", "Color")
 
 					local bar_accent = library:create("Frame", {
@@ -5768,7 +5858,7 @@ return LPH_NO_VIRTUALIZE(function()
 					Parent = __background,
 					Name = "",
 					Rotation = 90,
-					Color = rgbseq{rgbkey(0, rgb(41, 41, 55)), rgbkey(1, rgb(35, 35, 47))}
+					Color = rgbseq{rgbkey(0, rgb(24, 24, 32)), rgbkey(1, rgb(19, 19, 26))}
 				}) library:apply_theme(UIGradient, "contrast", "Color")
 
 				local tab_holder = library:create("Frame", {
@@ -5827,7 +5917,7 @@ return LPH_NO_VIRTUALIZE(function()
 							Parent = background,
 							Name = "",
 							Rotation = 90,
-							Color = rgbseq{rgbkey(0, rgb(41, 41, 55)), rgbkey(1, rgb(35, 35, 47))}
+							Color = rgbseq{rgbkey(0, rgb(24, 24, 32)), rgbkey(1, rgb(19, 19, 26))}
 						}) library:apply_theme(UIGradient, "contrast", "Color")
 
 						local text = library:create("TextLabel", {
@@ -6009,8 +6099,8 @@ return LPH_NO_VIRTUALIZE(function()
 					Parent = background,
 					Rotation = 90,
 					Color = rgbseq{
-						rgbkey(0, rgb(41, 41, 55)),
-						rgbkey(1, rgb(35, 35, 47))
+						rgbkey(0, rgb(24, 24, 32)),
+						rgbkey(1, rgb(19, 19, 26))
 					}
 				}) library:apply_theme(UIGradient, "contrast", "Color")
 
@@ -6205,8 +6295,8 @@ return LPH_NO_VIRTUALIZE(function()
 					Parent = hBody,
 					Rotation = 90,
 					Color = rgbseq{
-						rgbkey(0, rgb(41, 41, 55)),
-						rgbkey(1, rgb(35, 35, 47))
+						rgbkey(0, rgb(24, 24, 32)),
+						rgbkey(1, rgb(19, 19, 26))
 					}
 				}) library:apply_theme(hGrad, "contrast", "Color")
 
@@ -6302,8 +6392,8 @@ return LPH_NO_VIRTUALIZE(function()
 					Parent = bg,
 					Rotation = 90,
 					Color = rgbseq{
-						rgbkey(0, rgb(41, 41, 55)),
-						rgbkey(1, rgb(35, 35, 47))
+						rgbkey(0, rgb(24, 24, 32)),
+						rgbkey(1, rgb(19, 19, 26))
 					}
 				}) library:apply_theme(grad, "contrast", "Color")
 
@@ -6411,8 +6501,8 @@ return LPH_NO_VIRTUALIZE(function()
 					Parent = bg,
 					Rotation = 90,
 					Color = rgbseq{
-						rgbkey(0, rgb(41, 41, 55)),
-						rgbkey(1, rgb(35, 35, 47))
+						rgbkey(0, rgb(24, 24, 32)),
+						rgbkey(1, rgb(19, 19, 26))
 					}
 				}) library:apply_theme(grad, "contrast", "Color")
 
@@ -6485,7 +6575,7 @@ return LPH_NO_VIRTUALIZE(function()
 					local g = library:create("UIGradient", {
 						Parent = well_body,
 						Rotation = 90,
-						Color = rgbseq{rgbkey(0, rgb(41, 41, 55)), rgbkey(1, rgb(35, 35, 47))}
+						Color = rgbseq{rgbkey(0, rgb(24, 24, 32)), rgbkey(1, rgb(19, 19, 26))}
 					}) library:apply_theme(g, "contrast", "Color")
 				end
 
@@ -6947,8 +7037,8 @@ return LPH_NO_VIRTUALIZE(function()
 						Parent = contrast,
 						Rotation = 90,
 						Color = rgbseq{
-							rgbkey(0, rgb(41, 41, 55)),
-							rgbkey(1, rgb(35, 35, 47))
+							rgbkey(0, rgb(24, 24, 32)),
+							rgbkey(1, rgb(19, 19, 26))
 						}
 					}); library:apply_theme(UIGradient, "contrast", "Color")
 
@@ -7194,8 +7284,8 @@ return LPH_NO_VIRTUALIZE(function()
 						Rotation = 90,
 						Name = "_",
 						Color = rgbseq{
-							rgbkey(0, rgb(41, 41, 55)),
-							rgbkey(1, rgb(35, 35, 47))
+							rgbkey(0, rgb(24, 24, 32)),
+							rgbkey(1, rgb(19, 19, 26))
 						}
 					}) library:apply_theme(UIGradient, "contrast", "Color")
 
@@ -7360,8 +7450,8 @@ return LPH_NO_VIRTUALIZE(function()
 					Rotation = 90,
 					Name = "_",
 					Color = rgbseq{
-						rgbkey(0, rgb(41, 41, 55)),
-						rgbkey(1, rgb(35, 35, 47))
+						rgbkey(0, rgb(24, 24, 32)),
+						rgbkey(1, rgb(19, 19, 26))
 					}
 				}) library:apply_theme(UIGradient, "contrast", "Color")
 
@@ -7575,8 +7665,8 @@ return LPH_NO_VIRTUALIZE(function()
 						Rotation = 90,
 						Name = "_",
 						Color = rgbseq{
-						rgbkey(0, rgb(41, 41, 55)),
-						rgbkey(1, rgb(35, 35, 47))
+						rgbkey(0, rgb(24, 24, 32)),
+						rgbkey(1, rgb(19, 19, 26))
 					}
 					}) library:apply_theme(UIGradient, "contrast", "Color")
 
@@ -7708,8 +7798,8 @@ return LPH_NO_VIRTUALIZE(function()
 						Rotation = 90,
 						Name = "_",
 						Color = rgbseq{
-							rgbkey(0, rgb(41, 41, 55)),
-							rgbkey(1, rgb(35, 35, 47))
+							rgbkey(0, rgb(24, 24, 32)),
+							rgbkey(1, rgb(19, 19, 26))
 						}
 					}) library:apply_theme(UIGradient, "contrast", "Color")
 
@@ -8244,8 +8334,8 @@ return LPH_NO_VIRTUALIZE(function()
 					Name = "",
 					Rotation = 90,
 					Color = rgbseq{
-						rgbkey(0, rgb(41, 41, 55)),
-						rgbkey(1, rgb(35, 35, 47))
+						rgbkey(0, rgb(24, 24, 32)),
+						rgbkey(1, rgb(19, 19, 26))
 					}
 				}); library:apply_theme(UIGradient, "contrast", "Color")
 
@@ -8368,8 +8458,8 @@ return LPH_NO_VIRTUALIZE(function()
 						Name = "",
 						Rotation = 90,
 						Color = rgbseq{
-							rgbkey(0, rgb(41, 41, 55)),
-							rgbkey(1, rgb(35, 35, 47))
+							rgbkey(0, rgb(24, 24, 32)),
+							rgbkey(1, rgb(19, 19, 26))
 						}
 					}); library:apply_theme(UIGradient, "contrast", "Color")
 
@@ -8796,8 +8886,8 @@ return LPH_NO_VIRTUALIZE(function()
 						Parent = contrast,
 						Rotation = 90,
 						Color = rgbseq{
-							rgbkey(0, rgb(41, 41, 55)),
-							rgbkey(1, rgb(35, 35, 47))
+							rgbkey(0, rgb(24, 24, 32)),
+							rgbkey(1, rgb(19, 19, 26))
 						}
 					}) library:apply_theme(UIGradient, "contrast", "Color")
 
@@ -8901,8 +8991,8 @@ return LPH_NO_VIRTUALIZE(function()
 						Parent = contrast,
 						Rotation = 90,
 						Color = rgbseq{
-							rgbkey(0, rgb(41, 41, 55)),
-							rgbkey(1, rgb(35, 35, 47))
+							rgbkey(0, rgb(24, 24, 32)),
+							rgbkey(1, rgb(19, 19, 26))
 						}
 					}) library:apply_theme(UIGradient, "contrast", "Color")
 
@@ -9192,8 +9282,8 @@ return LPH_NO_VIRTUALIZE(function()
 						Name = "",
 						Rotation = 90,
 						Color = rgbseq{
-						rgbkey(0, rgb(41, 41, 55)),
-						rgbkey(1, rgb(35, 35, 47))
+						rgbkey(0, rgb(24, 24, 32)),
+						rgbkey(1, rgb(19, 19, 26))
 					}
 					}) library:apply_theme(UIGradient, "contrast", "Color")
 
@@ -9368,7 +9458,7 @@ return LPH_NO_VIRTUALIZE(function()
 				local grad = library:create("UIGradient", {
 					Parent = bg,
 					Rotation = 90,
-					Color = rgbseq{rgbkey(0, rgb(41, 41, 55)), rgbkey(1, rgb(35, 35, 47))}
+					Color = rgbseq{rgbkey(0, rgb(24, 24, 32)), rgbkey(1, rgb(19, 19, 26))}
 				}) library:apply_theme(grad, "contrast", "Color")
 
 				local sf = library:create("ScrollingFrame", {
@@ -9489,7 +9579,7 @@ return LPH_NO_VIRTUALIZE(function()
 				local grad = library:create("UIGradient", {
 					Parent = bg,
 					Rotation = 90,
-					Color = rgbseq{rgbkey(0, rgb(41, 41, 55)), rgbkey(1, rgb(35, 35, 47))}
+					Color = rgbseq{rgbkey(0, rgb(24, 24, 32)), rgbkey(1, rgb(19, 19, 26))}
 				}) library:apply_theme(grad, "contrast", "Color")
 
 				local prompt = library:create("TextLabel", {
@@ -9639,7 +9729,7 @@ return LPH_NO_VIRTUALIZE(function()
 				local grad = library:create("UIGradient", {
 					Parent = bg,
 					Rotation = 90,
-					Color = rgbseq{rgbkey(0, rgb(41, 41, 55)), rgbkey(1, rgb(35, 35, 47))}
+					Color = rgbseq{rgbkey(0, rgb(24, 24, 32)), rgbkey(1, rgb(19, 19, 26))}
 				}) library:apply_theme(grad, "contrast", "Color")
 
 				local header = library:create("TextLabel", {
@@ -9881,7 +9971,7 @@ return LPH_NO_VIRTUALIZE(function()
 					local body = library:create("UIGradient", {
 						Parent = btn,
 						Rotation = 90,
-						Color = rgbseq{rgbkey(0, rgb(41, 41, 55)), rgbkey(1, rgb(35, 35, 47))}
+						Color = rgbseq{rgbkey(0, rgb(24, 24, 32)), rgbkey(1, rgb(19, 19, 26))}
 					}) library:apply_theme(body, "contrast", "Color")
 					local stroke = library:create("UIStroke", {
 						Parent = btn,
@@ -10130,8 +10220,8 @@ return LPH_NO_VIRTUALIZE(function()
 						Name = "",
 						Rotation = 90,
 						Color = rgbseq{
-							rgbkey(0, rgb(41, 41, 55)),
-							rgbkey(1, rgb(35, 35, 47))
+							rgbkey(0, rgb(24, 24, 32)),
+							rgbkey(1, rgb(19, 19, 26))
 						}
 					})
 
@@ -10300,8 +10390,8 @@ return LPH_NO_VIRTUALIZE(function()
 					Name = "",
 					Rotation = 90,
 					Color = rgbseq{
-						rgbkey(0, rgb(41, 41, 55)),
-						rgbkey(1, rgb(35, 35, 47))
+						rgbkey(0, rgb(24, 24, 32)),
+						rgbkey(1, rgb(19, 19, 26))
 					}
 				})
 
@@ -10550,8 +10640,8 @@ return LPH_NO_VIRTUALIZE(function()
 						Name = "",
 						Rotation = 90,
 						Color = rgbseq{
-						rgbkey(0, rgb(41, 41, 55)),
-						rgbkey(1, rgb(35, 35, 47))
+						rgbkey(0, rgb(24, 24, 32)),
+						rgbkey(1, rgb(19, 19, 26))
 					}
 					}); library:apply_theme(UIGradient, "contrast", "Color")
 
