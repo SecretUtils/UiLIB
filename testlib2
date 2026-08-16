@@ -3934,15 +3934,32 @@ return LPH_NO_VIRTUALIZE(function()
 							w = math.max(sf * (flags["Static_Box_X"] or 2.5), 8)
 							cx, cy = sp.X, sp.Y
 						else
-							local up = hrp.CFrame.UpVector
-							local spT = vp_project(hpos + up * 2)
-							local spB = vp_project(hpos - up * 2.8)
+							--// MEASURE THE RIG, don't assume one.
+							--//
+							--// 2 studs up / 2.8 down off the root is an R15 skeleton, and it is
+							--// only ever correct for an R15 skeleton - on R6, or anything
+							--// wearing a bulky package, the box sits off the character. The real
+							--// ESP sizes from the model's extents, so do the same here and the
+							--// preview finally agrees with what ships.
+							local up, upAmt, dnAmt, aspect = hrp.CFrame.UpVector, 2, 2.8, nil
+							local ok_bb, bcf, bsz = pcall(function() return character:GetBoundingBox() end)
+							if ok_bb and bcf and bsz and bsz.Y > 0 then
+								hpos   = bcf.Position          -- box centre, not the root
+								up     = bcf.UpVector
+								upAmt  = bsz.Y * 0.5
+								dnAmt  = bsz.Y * 0.5
+								aspect = math.max(bsz.X, bsz.Z) / bsz.Y
+							end
+							local spT = vp_project(hpos + up * upAmt)
+							local spB = vp_project(hpos - up * dnAmt)
 							if not (spT and spB) then return end
 							local raw_h = math.abs(spB.Y - spT.Y)
 							if raw_h <= 0 then return end
 							local pad = flags["Dynamic_Box_Padding"] or 1
 							h  = raw_h * pad
-							w  = (raw_h / 1.5) * pad
+							--// width from the rig's own footprint when we have it; the 1.5
+							--// divisor is the old R15-shaped guess and stays as the fallback
+							w  = (aspect and (raw_h * aspect) or (raw_h / 1.5)) * pad
 							cx = (spT.X + spB.X) * 0.5
 							cy = math.min(spT.Y, spB.Y) + raw_h * 0.5
 						end
@@ -3950,7 +3967,13 @@ return LPH_NO_VIRTUALIZE(function()
 						holder.Position = dim2(0, cx, 0, cy)
 					end
 
+					--// BOTH RIGS IN ONE TABLE. The R6 pairs find nothing on an R15 character
+					--// and hide themselves, and the R15 pairs do the same on R6 - so the
+					--// skeleton draws for either with no rig detection anywhere. Previously
+					--// this was R15-only, which is why an R6 avatar showed no bones at all.
 					local PREVIEW_BONES = {
+						{"Head","Torso"},{"Torso","Left Arm"},{"Torso","Right Arm"},
+						{"Torso","Left Leg"},{"Torso","Right Leg"},
 						{"Head","UpperTorso"},{"UpperTorso","LowerTorso"},
 						{"UpperTorso","LeftUpperArm"},{"LeftUpperArm","LeftLowerArm"},{"LeftLowerArm","LeftHand"},
 						{"UpperTorso","RightUpperArm"},{"RightUpperArm","RightLowerArm"},{"RightLowerArm","RightHand"},
@@ -3979,14 +4002,25 @@ return LPH_NO_VIRTUALIZE(function()
 							((B and B.chams == true) or (not B and flags[cflag("Chams")] == true))
 
 						if o.chams_box then
-							o.chams_box.Visible = cham_on and cfg._selected_key == "chams"
-							if o.chams_box.Visible then
+							--// A Highlight DOES NOT RENDER INSIDE A ViewportFrame. That is a
+							--// Roblox limitation, not something this file can fix, and it is
+							--// the entire reason this flat proxy exists in the first place.
+							--// So the cube IS the chams preview and stays visible whenever the
+							--// chip is placed - it just gets emphasised while hovered so it
+							--// reads as a grabbable target.
+							o.chams_box.Visible = cham_on
+							if cham_on then
+								local hot = cfg._selected_key == "chams"
 								local fc = flags[cflag("Chams_Fill_Color")]
 								if fc and fc.Color then
 									o.chams_box.BackgroundColor3 = fc.Color
 									local st = o.chams_box:FindFirstChildOfClass("UIStroke")
-									if st then st.Color = fc.Color end
+									if st then
+										st.Color = hot and themes.preset.accent or fc.Color
+										st.Thickness = hot and 2 or 1
+									end
 								end
+								o.chams_box.BackgroundTransparency = hot and 0.7 or 0.82
 							end
 						end
 						if o.chams then
@@ -4742,7 +4776,7 @@ return LPH_NO_VIRTUALIZE(function()
 							Position = dim2(0, 0, 0, 0); Size = dim2(1, 0, 1, 0); BorderSizePixel = 0; ZIndex = 5;
 						});
 						objects[ "skel_lines" ] = {}
-						for i = 1, 14 do
+						for i = 1, 20 do
 							objects[ "skel_lines" ][i] = library:create( "Frame" , {
 								Parent = objects[ "skeleton" ]; Name = "\0"; Visible = false;
 								BackgroundColor3 = rgb(255, 255, 255); BorderColor3 = rgb(0, 0, 0);
@@ -5650,9 +5684,13 @@ return LPH_NO_VIRTUALIZE(function()
 						--// visible WHILE hovered, so testing visibility here would be a
 						--// deadlock - never visible, therefore never hovered, therefore never
 						--// visible. Hit-test them whenever the chip is placed instead.
+						--// SMALLEST TARGET WINS. The chams cube spans nearly the whole box while
+						--// the skeleton box is a narrow 24x50 strip inside it, so testing chams
+						--// first made the skeleton practically unselectable - the cube swallowed
+						--// every hover. Order here is deliberately smallest-to-largest.
 						local S = cfg._show
-						if o.chams_box and S and S.chams and library:hovering(o.chams_box) then return o.chams_box, "chams" end
 						if o.skel_box and S and S.skeleton and library:hovering(o.skel_box) then return o.skel_box, "skeleton" end
+						if o.chams_box and S and S.chams and library:hovering(o.chams_box) then return o.chams_box, "chams" end
 						if o.ammo_bg and o.ammo_bg.Parent == o.holder and library:hovering(o.ammo_bg) then return o.ammo_bg, "ammo" end
 						if o.healthbar_holder and o.healthbar_holder.Parent == o.holder and library:hovering(o.healthbar_holder) then return o.healthbar_holder, "healthbar" end
 						for key, side in pairs(placed) do
