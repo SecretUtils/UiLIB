@@ -1985,6 +1985,292 @@ return LPH_NO_VIRTUALIZE(function()
 				return setmetatable(cfg, library)
 			end
 
+			--// RADAR - ported 1:1 from nhack's Library.RadarWidget.
+			--//
+			--// Same geometry (220x262 shell, 10/30 inset panel, bounds inset 20 and lifted 6,
+			--// 6px centre dot, cross at 0.3 alpha + quarter grid at 0.55), same element set,
+			--// same API surface.
+			--//
+			--// IT IS UI ONLY, exactly like the original: nhack's SetSweep/SetHeading are stubs
+			--// that return their argument, and Upsert takes PIXEL coordinates inside the
+			--// bounds rect. The consumer owns the projection - read get_bounds(), rotate the
+			--// world offset by the camera yaw, scale by bounds/range, offset by half the
+			--// bounds. That is why range is only ever printed in the footer here.
+			--//
+			--// Two mechanisms had to be adapted because this lib has no equivalent:
+			--//   MakeDraggable          -> library:draggify (pos_key "radar", so the position
+			--//                             rides along in ui_positions like every other widget)
+			--//   BindToWindowVisibility -> nothing. it lives in sgui and owns its own
+			--//                             visibility, matching library:indicator. a radar you
+			--//                             can see with the menu closed is the useful default;
+			--//                             drive set_visible from a toggle if you want nhack's.
+			function library:radar(options)
+				options = options or {}
+				local cfg = {
+					entries = {},
+					range = options.range or 250,
+					visible = options.visible ~= false,
+					items = {},
+				}
+
+				local items = cfg.items; do
+					--// nhack rings the shell in two UIStrokes (Border at a 1px offset, then
+					--// Outline). BorderOffset is not on every UIStroke build, and library:create
+					--// assigns properties raw, so the nested-frame chrome this lib uses
+					--// everywhere else gets the same doubled border without the risk.
+					items.outline = library:create("Frame", {
+						Parent = sgui,
+						Name = "\0",
+						Visible = cfg.visible,
+						Position = dim_offset(
+							clamp(options.x or 860, 0, max(0, camera.ViewportSize.X - 220)),
+							clamp(options.y or 132, 0, max(0, camera.ViewportSize.Y - 262))),
+						Size = dim2(0, 220, 0, 262),
+						BorderSizePixel = 0,
+						BackgroundColor3 = themes.preset.outline
+					}) library:apply_theme(items.outline, "outline", "BackgroundColor3")
+					library:draggify(items.outline, "radar")
+
+					items.inline = library:create("Frame", {
+						Parent = items.outline,
+						Name = "\0",
+						Position = dim2(0, 1, 0, 1),
+						Size = dim2(1, -2, 1, -2),
+						BorderColor3 = rgb(0, 0, 0),
+						BorderSizePixel = 0,
+						BackgroundColor3 = themes.preset.inline
+					}) library:apply_theme(items.inline, "inline", "BackgroundColor3")
+
+					items.body = library:create("Frame", {
+						Parent = items.inline,
+						Name = "\0",
+						Position = dim2(0, 1, 0, 1),
+						Size = dim2(1, -2, 1, -2),
+						BorderColor3 = rgb(0, 0, 0),
+						BorderSizePixel = 0,
+						BackgroundColor3 = rgb(255, 255, 255)
+					})
+
+					items.gradient = library:create("UIGradient", {
+						Parent = items.body,
+						Name = "\0",
+						Rotation = 90,
+						Color = rgbseq{rgbkey(0, rgb(24, 24, 32)), rgbkey(1, rgb(19, 19, 26))}
+					}) library:apply_theme(items.gradient, "contrast", "Color")
+
+					items.accent_liner = library:create("Frame", {
+						Parent = items.body,
+						Name = "\0",
+						Size = dim2(1, 0, 0, 1),
+						BorderSizePixel = 0,
+						ZIndex = 5,
+						BackgroundColor3 = themes.preset.accent
+					}) library:apply_theme(items.accent_liner, "accent", "BackgroundColor3")
+
+					items.dark_liner = library:create("Frame", {
+						Parent = items.body,
+						Name = "\0",
+						Position = dim2(0, 0, 0, 1),
+						Size = dim2(1, 0, 0, 1),
+						BorderSizePixel = 0,
+						ZIndex = 5,
+						BackgroundColor3 = themes.preset.low_contrast
+					}) library:apply_theme(items.dark_liner, "low_contrast", "BackgroundColor3")
+
+					items.text = library:create("TextLabel", {
+						Parent = items.body,
+						Name = "\0",
+						FontFace = library.font,
+						TextSize = 12,
+						TextColor3 = themes.preset.accent,
+						Text = options.name or "Radar",
+						Size = dim2(0, 0, 0, 15),
+						Position = dim2(0, 10, 0, 6),
+						BackgroundTransparency = 1,
+						TextXAlignment = Enum.TextXAlignment.Left,
+						BorderSizePixel = 0,
+						AutomaticSize = Enum.AutomaticSize.X
+					}) library:apply_theme(items.text, "accent", "TextColor3")
+
+					items.panel = library:create("Frame", {
+						Parent = items.body,
+						Name = "\0",
+						Position = dim2(0, 10, 0, 30),
+						Size = dim2(1, -20, 1, -64),
+						ZIndex = 1,
+						BorderSizePixel = 0,
+						BackgroundColor3 = themes.preset.high_contrast
+					}) library:apply_theme(items.panel, "high_contrast", "BackgroundColor3")
+
+					do
+						local st = library:create("UIStroke", {
+							Parent = items.panel, Name = "\0", Thickness = 1,
+							ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+							LineJoinMode = Enum.LineJoinMode.Miter,
+							Color = themes.preset.outline
+						}) library:apply_theme(st, "outline", "Color")
+					end
+
+					items.bounds = library:create("Frame", {
+						Parent = items.panel,
+						Name = "\0",
+						AnchorPoint = vec2(0.5, 0.5),
+						Position = dim2(0.5, 0, 0.5, -6),
+						Size = dim2(1, -20, 1, -20),
+						ZIndex = 1,
+						BorderSizePixel = 0,
+						ClipsDescendants = true,
+						BackgroundColor3 = themes.preset.low_contrast
+					}) library:apply_theme(items.bounds, "low_contrast", "BackgroundColor3")
+
+					do
+						local st = library:create("UIStroke", {
+							Parent = items.bounds, Name = "\0", Thickness = 1,
+							ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+							LineJoinMode = Enum.LineJoinMode.Miter,
+							Color = themes.preset.outline
+						}) library:apply_theme(st, "outline", "Color")
+					end
+
+					--// cross first at 0.3, quarter grid at 0.55 - nhack keys that off the name
+					for _, line in next, {
+						{"cross_x",     dim2(1, 0, 0, 1), dim2(0, 0, 0.5, 0),  0.3},
+						{"cross_y",     dim2(0, 1, 1, 0), dim2(0.5, 0, 0, 0),  0.3},
+						{"grid_top",    dim2(1, 0, 0, 1), dim2(0, 0, 0.25, 0), 0.55},
+						{"grid_bottom", dim2(1, 0, 0, 1), dim2(0, 0, 0.75, 0), 0.55},
+						{"grid_left",   dim2(0, 1, 1, 0), dim2(0.25, 0, 0, 0), 0.55},
+						{"grid_right",  dim2(0, 1, 1, 0), dim2(0.75, 0, 0, 0), 0.55},
+					} do
+						items[line[1]] = library:create("Frame", {
+							Parent = items.bounds,
+							Name = "\0",
+							Size = line[2],
+							Position = line[3],
+							ZIndex = 2,
+							BorderSizePixel = 0,
+							BackgroundColor3 = themes.preset.inline,
+							BackgroundTransparency = line[4]
+						}) library:apply_theme(items[line[1]], "inline", "BackgroundColor3")
+					end
+
+					items.center_dot = library:create("Frame", {
+						Parent = items.bounds,
+						Name = "\0",
+						AnchorPoint = vec2(0.5, 0.5),
+						Position = dim2(0.5, 0, 0.5, 0),
+						Size = dim2(0, 6, 0, 6),
+						ZIndex = 3,
+						BorderSizePixel = 0,
+						BackgroundColor3 = themes.preset.accent
+					}) library:apply_theme(items.center_dot, "accent", "BackgroundColor3")
+					library:create("UICorner", {Parent = items.center_dot, Name = "\0", CornerRadius = dim(1, 0)})
+
+					items.footer = library:create("TextLabel", {
+						Parent = items.body,
+						Name = "\0",
+						FontFace = library.font,
+						TextSize = 12,
+						TextColor3 = themes.preset.text,
+						Text = ("0 contacts | %d studs"):format(cfg.range),
+						AnchorPoint = vec2(0, 1),
+						Position = dim2(0, 10, 1, -8),
+						Size = dim2(1, -20, 0, 15),
+						BackgroundTransparency = 1,
+						TextXAlignment = Enum.TextXAlignment.Left,
+						BorderSizePixel = 0
+					}) library:apply_theme(items.footer, "text", "TextColor3")
+				end
+
+				local function create_entry(key)
+					local entry = {}
+					entry.dot = library:create("Frame", {
+						Parent = items.bounds,
+						Name = "\0",
+						AnchorPoint = vec2(0.5, 0.5),
+						Position = dim2(0.5, 0, 0.5, 0),
+						Size = dim2(0, 4, 0, 4),
+						ZIndex = 4,
+						BorderSizePixel = 0,
+						BackgroundColor3 = themes.preset.accent
+					}) library:apply_theme(entry.dot, "accent", "BackgroundColor3")
+					library:create("UICorner", {Parent = entry.dot, Name = "\0", CornerRadius = dim(0, 1)})
+					cfg.entries[key] = entry
+					return entry
+				end
+
+				function cfg.set_visible(bool)
+					cfg.visible = bool and true or false
+					items.outline.Visible = cfg.visible
+				end
+
+				function cfg.set_text(text)
+					items.text.Text = tostring(text or "")
+				end
+
+				function cfg.set_footer(text)
+					items.footer.Text = tostring(text or "")
+				end
+
+				function cfg.set_range(value)
+					cfg.range = value
+					cfg.set_footer(("%d contacts | %d studs"):format(0, floor(value or 0)))
+				end
+
+				--// nhack's two no-ops. kept so a consumer written against the original still
+				--// runs; there is no sweep hand or heading ring in the widget to drive.
+				function cfg.set_sweep(angle) return angle end
+				function cfg.set_heading(angle) return angle end
+
+				--// data = {position = Vector2 (PIXELS inside the bounds rect), size = number,
+				--//         visible = boolean, transparency = number}
+				function cfg.upsert(key, data)
+					local entry = cfg.entries[key] or create_entry(key)
+					local dot = entry.dot
+
+					local position = data and data.position
+					local size = data and data.size
+					local visible = data and data.visible
+					local transparency = data and data.transparency
+
+					if typeof(position) == "Vector2" then
+						dot.Position = dim2(0, position.X, 0, position.Y)
+					end
+					if typeof(size) == "number" then
+						dot.Size = dim2(0, size, 0, size)
+					end
+					if typeof(transparency) == "number" then
+						dot.BackgroundTransparency = transparency
+					else
+						dot.BackgroundTransparency = 0
+					end
+
+					dot.Visible = visible ~= false
+					return entry
+				end
+
+				function cfg.remove(key)
+					local entry = cfg.entries[key]
+					if not entry then return end
+					cfg.entries[key] = nil
+					pcall(function() entry.dot:Destroy() end)
+				end
+
+				function cfg.clear()
+					for key, entry in next, cfg.entries do
+						cfg.entries[key] = nil
+						pcall(function() entry.dot:Destroy() end)
+					end
+				end
+
+				function cfg.get_bounds()
+					return items.bounds.AbsoluteSize
+				end
+
+				cfg.set_visible(cfg.visible)
+
+				return setmetatable(cfg, library)
+			end
+
 			function library:window(properties)
 				local window = {opened = true}
 				local opened = {}
