@@ -2011,6 +2011,10 @@ return LPH_NO_VIRTUALIZE(function()
 					range = options.range or 250,
 					visible = options.visible ~= false,
 					items = {},
+					--// two contact colours. upsert picks between them off `looking`, or a
+					--// consumer can hand it an explicit `color` and override both.
+					dot_color  = options.dot_color  or themes.preset.accent,
+					look_color = options.look_color or rgb(255, 60, 60),
 				}
 
 				local items = cfg.items; do
@@ -2182,7 +2186,12 @@ return LPH_NO_VIRTUALIZE(function()
 				end
 
 				local function create_entry(key)
-					local entry = {}
+					local entry = {looking = false, custom = false}
+					--// deliberately NOT registered in the accent theme channel: these are
+					--// individually coloured, and update_theme repaints anything still sitting
+					--// on the old preset - which would silently drag idle contacts back to
+					--// accent the first time someone touched the accent picker. bind the Dot
+					--// Color picker's "Use Accent" instead if you want them to follow.
 					entry.dot = library:create("Frame", {
 						Parent = items.bounds,
 						Name = "\0",
@@ -2191,11 +2200,22 @@ return LPH_NO_VIRTUALIZE(function()
 						Size = dim2(0, 4, 0, 4),
 						ZIndex = 4,
 						BorderSizePixel = 0,
-						BackgroundColor3 = themes.preset.accent
-					}) library:apply_theme(entry.dot, "accent", "BackgroundColor3")
+						BackgroundColor3 = cfg.dot_color
+					})
 					library:create("UICorner", {Parent = entry.dot, Name = "\0", CornerRadius = dim(0, 1)})
 					cfg.entries[key] = entry
 					return entry
+				end
+
+				--// re-tint every contact that hasn't been given an explicit colour. entries
+				--// remember their own `looking` state so a colour change lands on the right
+				--// half of them without the consumer having to re-upsert.
+				local function repaint()
+					for _, entry in next, cfg.entries do
+						if entry.dot and entry.dot.Parent and not entry.custom then
+							entry.dot.BackgroundColor3 = entry.looking and cfg.look_color or cfg.dot_color
+						end
+					end
 				end
 
 				function cfg.set_visible(bool)
@@ -2221,8 +2241,23 @@ return LPH_NO_VIRTUALIZE(function()
 				function cfg.set_sweep(angle) return angle end
 				function cfg.set_heading(angle) return angle end
 
+				function cfg.set_dot_color(c)
+					if typeof(c) == "Color3" then cfg.dot_color = c end
+					repaint()
+				end
+
+				function cfg.set_look_color(c)
+					if typeof(c) == "Color3" then cfg.look_color = c end
+					repaint()
+				end
+
 				--// data = {position = Vector2 (PIXELS inside the bounds rect), size = number,
-				--//         visible = boolean, transparency = number}
+				--//         visible = boolean, transparency = number,
+				--//         looking = boolean,   -- facing you -> uses look_color
+				--//         color = Color3}      -- explicit, wins over `looking`
+				--//
+				--// `looking` is STICKY: omit it and the contact keeps whatever it had, so a
+				--// per-frame position update doesn't have to re-state the aim check.
 				function cfg.upsert(key, data)
 					local entry = cfg.entries[key] or create_entry(key)
 					local dot = entry.dot
@@ -2231,6 +2266,7 @@ return LPH_NO_VIRTUALIZE(function()
 					local size = data and data.size
 					local visible = data and data.visible
 					local transparency = data and data.transparency
+					local color = data and data.color
 
 					if typeof(position) == "Vector2" then
 						dot.Position = dim2(0, position.X, 0, position.Y)
@@ -2242,6 +2278,17 @@ return LPH_NO_VIRTUALIZE(function()
 						dot.BackgroundTransparency = transparency
 					else
 						dot.BackgroundTransparency = 0
+					end
+
+					if typeof(color) == "Color3" then
+						entry.custom = true
+						dot.BackgroundColor3 = color
+					else
+						entry.custom = false
+						if data and data.looking ~= nil then
+							entry.looking = data.looking and true or false
+						end
+						dot.BackgroundColor3 = entry.looking and cfg.look_color or cfg.dot_color
 					end
 
 					dot.Visible = visible ~= false
@@ -2878,6 +2925,12 @@ return LPH_NO_VIRTUALIZE(function()
 						local radar_opts = radar_tgl:plus({name = "Radar Options"})
 						radar_opts:slider({name = "Range", flag = "radar_range", min = 50, max = 1000, default = 250,
 							interval = 10, suffix = "st", callback = function(v) radar.set_range(v) end})
+						radar_opts:label({name = "Dot Color"})
+							:colorpicker({name = "Dot", flag = "radar_dot_color", color = themes.preset.accent,
+								use_accent = true, callback = function(c) radar.set_dot_color(c) end})
+						radar_opts:label({name = "Looking At You"})
+							:colorpicker({name = "Looking", flag = "radar_look_color", color = rgb(255, 60, 60),
+								callback = function(c) radar.set_look_color(c) end})
 						access_section:toggle({name = "Aero Snap", flag = "aero_snap", default = false})
 						access_section:label({name = "Click Sound Style"})
 						local ui_click_custom
