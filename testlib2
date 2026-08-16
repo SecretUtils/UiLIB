@@ -2017,6 +2017,11 @@ return LPH_NO_VIRTUALIZE(function()
 					dot_color  = options.dot_color  or themes.preset.accent,
 					look_color = options.look_color or rgb(255, 60, 60),
 					line_length = options.line_length or 10,
+					--// FRACTIONAL on purpose. a Frame's offset is a float, so 0.5 renders as a
+					--// hairline - genuinely thinner than the 1px minimum you'd get treating
+					--// this as an integer. rotated frames get antialiased, which is what made
+					--// a 1px needle read as roughly two.
+					line_thickness = options.line_thickness or 0.5,
 				}
 
 				local items = cfg.items; do
@@ -2188,7 +2193,10 @@ return LPH_NO_VIRTUALIZE(function()
 				end
 
 				local function create_entry(key)
-					local entry = {looking = false, custom = false, facing = false}
+					--// px/py/angle are remembered because the needle is positioned FROM them
+					--// every time either changes - see place_line.
+					local entry = {looking = false, custom = false, facing = false,
+						px = 0, py = 0, angle = 0}
 					--// deliberately NOT registered in the accent theme channel: these are
 					--// individually coloured, and update_theme repaints anything still sitting
 					--// on the old preset - which would silently drag idle contacts back to
@@ -2213,15 +2221,13 @@ return LPH_NO_VIRTUALIZE(function()
 					--// the dot's 6px box as its own coordinate space, so the line could never
 					--// be longer than the circle.
 					--//
-					--// AnchorPoint (0.5, 1) puts the pivot at the BOTTOM of the bar, and
-					--// GuiObject.Rotation turns about the anchor - so it hangs upward out of
-					--// the contact and Rotation 0 points straight up the radar.
+					--// CENTRE-anchored, and place_line does the offset by hand - see there.
 					entry.line = library:create("Frame", {
 						Parent = items.bounds,
 						Name = "\0",
-						AnchorPoint = vec2(0.5, 1),
+						AnchorPoint = vec2(0.5, 0.5),
 						Position = dim2(0.5, 0, 0.5, 0),
-						Size = dim2(0, 1, 0, cfg.line_length),
+						Size = dim2(0, cfg.line_thickness, 0, cfg.line_length),
 						ZIndex = 3,
 						BorderSizePixel = 0,
 						Visible = false,
@@ -2230,6 +2236,38 @@ return LPH_NO_VIRTUALIZE(function()
 
 					cfg.entries[key] = entry
 					return entry
+				end
+
+				--// PLACING THE NEEDLE.
+				--//
+				--// The obvious build is to anchor the bar at its base and let Rotation swing
+				--// it about the contact. That does not work: Rotation pivots on the object's
+				--// CENTRE, so a base-anchored bar orbits its own midpoint and ends up floating
+				--// beside the dot rather than hanging off it.
+				--//
+				--// So the bar stays centre-anchored and its MIDPOINT is placed half a length
+				--// out along the facing direction. It then spans exactly from the contact to
+				--// `line_length` px away, and it is correct whichever point Rotation pivots on.
+				--//
+				--// Screen direction for a clockwise-from-up angle: (sin, -cos).
+				local function place_line(entry)
+					local line = entry.line
+					if not (line and line.Parent) then return end
+
+					local len = cfg.line_length
+					if len <= 0 or entry.facing ~= true or not entry.dot.Visible then
+						line.Visible = false
+						return
+					end
+
+					local a = rad(entry.angle or 0)
+					local dx, dy = sin(a), -cos(a)
+					line.Size = dim2(0, cfg.line_thickness, 0, len)
+					line.Rotation = entry.angle or 0
+					line.Position = dim2(
+						0, (entry.px or 0) + dx * len * 0.5,
+						0, (entry.py or 0) + dy * len * 0.5)
+					line.Visible = true
 				end
 
 				--// re-tint every contact that hasn't been given an explicit colour. entries
@@ -2280,12 +2318,15 @@ return LPH_NO_VIRTUALIZE(function()
 				end
 
 				function cfg.set_line_length(n)
-					cfg.line_length = math.clamp(tonumber(n) or cfg.line_length, 0, 40)
-					for _, entry in next, cfg.entries do
-						if entry.line and entry.line.Parent then
-							entry.line.Size = dim2(0, 1, 0, cfg.line_length)
-						end
-					end
+					cfg.line_length = math.clamp(tonumber(n) or cfg.line_length, 0, 90)
+					--// length feeds the offset as well as the size, so every needle has to be
+					--// re-placed, not just resized
+					for _, entry in next, cfg.entries do place_line(entry) end
+				end
+
+				function cfg.set_line_thickness(n)
+					cfg.line_thickness = math.clamp(tonumber(n) or cfg.line_thickness, 0.25, 4)
+					for _, entry in next, cfg.entries do place_line(entry) end
 				end
 
 				--// data = {position = Vector2 (PIXELS inside the bounds rect), size = number,
@@ -2309,9 +2350,8 @@ return LPH_NO_VIRTUALIZE(function()
 					local facing = data and data.facing
 
 					if typeof(position) == "Vector2" then
-						--// the needle is a sibling, so it has to be moved alongside the dot
 						dot.Position = dim2(0, position.X, 0, position.Y)
-						line.Position = dim2(0, position.X, 0, position.Y)
+						entry.px, entry.py = position.X, position.Y
 					end
 					if typeof(size) == "number" then
 						dot.Size = dim2(0, size, 0, size)
@@ -2325,7 +2365,7 @@ return LPH_NO_VIRTUALIZE(function()
 					end
 
 					if typeof(facing) == "number" then
-						line.Rotation = facing
+						entry.angle = facing
 						entry.facing = true
 					elseif facing == false then
 						entry.facing = false
@@ -2346,7 +2386,10 @@ return LPH_NO_VIRTUALIZE(function()
 					line.BackgroundColor3 = entry.looking and cfg.look_color or cfg.dot_color
 
 					dot.Visible = visible ~= false
-					line.Visible = dot.Visible and entry.facing == true and cfg.line_length > 0
+					--// position AND angle both feed the needle's placement, so re-place it
+					--// after either has been taken in. this is also what makes the needles
+					--// swing correctly as the whole plot rotates with your camera.
+					place_line(entry)
 					return entry
 				end
 
@@ -2988,10 +3031,14 @@ return LPH_NO_VIRTUALIZE(function()
 						radar_opts:label({name = "Looking At You"})
 							:colorpicker({name = "Looking", flag = "radar_look_color", color = rgb(255, 60, 60),
 								callback = function(c) radar.set_look_color(c) end})
-						radar_opts:slider({name = "Facing Line", flag = "radar_line_len", min = 0, max = 24,
+						radar_opts:slider({name = "Facing Line", flag = "radar_line_len", min = 0, max = 90,
 							default = 10, interval = 1, suffix = "px",
 							tooltip = "length of the needle showing which way a contact faces - 0 hides it",
 							callback = function(v) radar.set_line_length(v) end})
+						radar_opts:slider({name = "Line Width", flag = "radar_line_width", min = 0.25, max = 4,
+							default = 0.5, interval = 0.25, suffix = "px",
+							tooltip = "sub-pixel values are allowed - 0.5 is a hairline",
+							callback = function(v) radar.set_line_thickness(v) end})
 						access_section:toggle({name = "Aero Snap", flag = "aero_snap", default = false})
 						access_section:label({name = "Click Sound Style"})
 						local ui_click_custom
