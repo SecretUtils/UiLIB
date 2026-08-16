@@ -6975,14 +6975,19 @@ return LPH_NO_VIRTUALIZE(function()
 
 					cfg.value = math.clamp(library:round(value, cfg.intervals), cfg.min, cfg.max)
 
-					--// nhack eases the fill instead of snapping it. while DRAGGING we snap:
-					--// the drag handler fires every mouse move, and a tween per move would
-					--// stack dozens of competing tweens on one frame and lag behind the cursor.
+					--// nhack eases the fill instead of snapping it, INCLUDING while dragging -
+					--// that trailing catch-up is the whole effect, and dragging is the only way
+					--// a slider ever moves, so snapping there meant the animation never showed.
+					--// stacking isn't a concern: TweenService cancels an in-flight tween as soon
+					--// as another one targets the same property on the same instance. the drag
+					--// time is cut right down so the fill still tracks the cursor.
 					local goal = dim2((cfg.value - cfg.min) / (cfg.max - cfg.min), 0, 1, 0)
-					if instant or cfg.dragging or library.animation.time <= 0 then
+					local t = library.animation.time
+					if cfg.dragging then t = math.min(t, 0.09) end
+					if instant or t <= 0 then
 						fill.Size = goal
 					else
-						library:tween(fill, {Size = goal})
+						library:tween(fill, {Size = goal}, library:tween_info(t))
 					end
 					slidertext.Text = (cfg.labels and cfg.labels[cfg.value]) or (tostring(cfg.value) .. cfg.suffix .. "/" .. tostring(cfg.max) .. cfg.suffix)
 					flags[cfg.flag] = cfg.value
